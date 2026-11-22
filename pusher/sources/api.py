@@ -35,6 +35,10 @@ USER_FIELDS = "username"
 RETWEET_PREFIX = re.compile(r"^RT @(\w+):")
 MAX_RESULTS_PER_PAGE = 100
 MAX_RATE_LIMIT_WAIT_SECONDS = 15 * 60
+# A host may resolve to an IPv6 address that never answers; a short connect
+# timeout makes requests fall back to the next (IPv4) address quickly instead
+# of waiting minutes for the operating system to give up.
+CONNECT_TIMEOUT_SECONDS = 10
 
 # Recent search only covers the last 7 days; stay a little inside that window.
 SEARCH_WINDOW = timedelta(days=7) - timedelta(minutes=5)
@@ -71,7 +75,7 @@ class ApiTweetSource(TweetSource):
         super().__init__(username, mentioned_usernames, include_retweets, include_replies)
         self._session = session or requests.Session()
         self._session.headers.update({"Authorization": f"Bearer {bearer_token}"})
-        self._timeout = timeout
+        self._timeout = (CONNECT_TIMEOUT_SECONDS, timeout)
 
     @classmethod
     def from_config(cls, config: "Config", feed: "Feed") -> "ApiTweetSource":

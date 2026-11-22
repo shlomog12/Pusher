@@ -18,6 +18,10 @@ MAX_MESSAGE_LENGTH = 4096
 MAX_CAPTION_LENGTH = 1024
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+# A host may resolve to an IPv6 address that never answers; a short connect
+# timeout makes requests fall back to the next (IPv4) address quickly instead
+# of waiting minutes for the operating system to give up.
+CONNECT_TIMEOUT_SECONDS = 10
 
 _SINGLE_MEDIA_METHODS = {
     MediaType.PHOTO: ("sendPhoto", "photo"),
@@ -41,7 +45,7 @@ class TelegramClient:
         self._base_url = f"{API_BASE_URL}/bot{bot_token}"
         self._chat_id = chat_id
         self._session = session or requests.Session()
-        self._timeout = timeout
+        self._timeout = (CONNECT_TIMEOUT_SECONDS, timeout)
 
     def send_tweet(self, tweet: Tweet) -> None:
         text = format_tweet(tweet)
