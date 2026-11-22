@@ -70,20 +70,26 @@ class TweetForwarder:
             return 0
 
         sent = 0
+        newest_id = since_id
         for tweet in source.new_tweets(since_id):
             if source.wants(tweet):
                 logger.info("Forwarding tweet %s", tweet.url)
                 self._telegram.send_tweet(tweet)
                 sent += 1
-            self._state.save_last_tweet_id(source.username, tweet.id)
+            # A merged thread can end after a later standalone tweet; never move
+            # the saved id backwards, or its tweets would be sent again.
+            newest_id = max(newest_id, tweet.last_id, key=int)
+            self._state.save_last_tweet_id(source.username, newest_id)
         return sent
 
 
 def _describe(source: TweetSource) -> str:
     if source.mentioned_usernames:
         names = ", ".join(f"@{name}" for name in source.mentioned_usernames)
-        return f"tweets that tag {names}"
-    return "all tweets" + (" and retweets" if source.include_retweets else "")
+        threads = ", threads as one message" if source.include_threads else ""
+        return f"tweets that tag {names}{threads}"
+    description = "all tweets" + (" and retweets" if source.include_retweets else "")
+    return description + (", threads as one message" if source.include_threads else "")
 
 
 def main(argv: list[str] | None = None) -> None:

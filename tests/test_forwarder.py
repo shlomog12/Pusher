@@ -98,3 +98,13 @@ def test_each_source_keeps_its_own_state_and_failures_are_isolated(tmp_path):
     assert telegram.sent == ["71"]
     assert state.load_last_tweet_id("page") == "50"
     assert state.load_last_tweet_id("me") == "71"
+
+
+def test_merged_thread_moves_state_to_its_newest_tweet(tmp_path):
+    thread = _tweet("81", {"me"}).with_thread([_tweet("85", set())])
+    source = FakeSource("Page", [thread, _tweet("83", {"me"})], mentioned_usernames=["me"])
+    forwarder, telegram, state = _forwarder(tmp_path, source)
+    state.save_last_tweet_id("Page", "80")
+
+    assert forwarder.run_once() == 2
+    assert state.load_last_tweet_id("page") == "85"

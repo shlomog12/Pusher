@@ -77,6 +77,8 @@ class Feed:
     mentioned_usernames: tuple[str, ...] = ()
     include_retweets: bool = False
     include_replies: bool = False
+    # Merge the account's follow-up tweets of a thread into one message.
+    include_threads: bool = True
 
 
 @dataclass(frozen=True)
@@ -92,6 +94,7 @@ class Config:
     poll_interval_seconds: int = 300
     include_retweets: bool = False
     include_replies: bool = False
+    include_threads: bool = True
     state_file: Path = Path("state.json")
     log_level: str = "INFO"
     twitter_bearer_token: str | None = None
@@ -125,6 +128,7 @@ class Config:
                 mentioned_usernames=self.mentioned_usernames,
                 include_retweets=self.include_retweets,
                 include_replies=self.include_replies,
+                include_threads=self.include_threads,
             )
         ]
         if self.forward_my_tweets and self.my_username:
@@ -133,6 +137,7 @@ class Config:
                     username=self.my_username,
                     include_retweets=self.forward_my_retweets,
                     include_replies=self.include_replies,
+                    include_threads=self.include_threads,
                 )
             )
         return feeds
@@ -165,6 +170,7 @@ class Config:
             poll_interval_seconds=_positive_int("POLL_INTERVAL_SECONDS", 300),
             include_retweets=_bool("INCLUDE_RETWEETS", False),
             include_replies=_bool("INCLUDE_REPLIES", False),
+            include_threads=_bool("INCLUDE_THREADS", True),
             state_file=Path(os.getenv("STATE_FILE", "state.json")),
             log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
             twitter_bearer_token=_optional("TWITTER_BEARER_TOKEN"),

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 
 
@@ -28,6 +28,10 @@ class Tweet:
     media: tuple[Media, ...] = ()
     created_at: str | None = None
     retweeted_username: str | None = None
+    in_reply_to_id: str | None = None
+    in_reply_to_username: str | None = None
+    # Ids of the author's follow-up tweets merged into this one (see ``with_thread``).
+    thread_ids: tuple[str, ...] = ()
 
     @property
     def url(self) -> str:
@@ -37,5 +41,58 @@ class Tweet:
     def is_retweet(self) -> bool:
         return self.retweeted_username is not None
 
+    @property
+    def is_reply(self) -> bool:
+        return self.in_reply_to_id is not None
+
+    @property
+    def is_self_reply(self) -> bool:
+        """A reply to the author's own tweet, i.e. the next tweet of a thread."""
+        return (
+            self.is_reply
+            and (self.in_reply_to_username or "").lower() == self.author_username.lower()
+        )
+
+    @property
+    def last_id(self) -> str:
+        """The newest tweet id this tweet covers, including merged thread tweets."""
+        return max((self.id, *self.thread_ids), key=int)
+
     def mentions_user(self, username: str) -> bool:
         return username.lower() in self.mentions
+
+    def with_thread(self, continuations: "list[Tweet]") -> "Tweet":
+        """This tweet with the given follow-up tweets appended to its text and media."""
+        if not continuations:
+            return self
+        parts = [self, *continuations]
+        return replace(
+            self,
+            text="\n\n".join(part.text for part in parts if part.text),
+            mentions=frozenset().union(*(part.mentions for part in parts)),
+            media=tuple(item for part in parts for item in part.media),
+            thread_ids=self.thread_ids
+            + tuple(i for part in continuations for i in (part.id, *part.thread_ids)),
+        )
+
+
+def merge_threads(tweets: list[Tweet]) -> list[Tweet]:
+    """Merge every self-reply into the tweet that starts its thread.
+
+    ``tweets`` must be ordered oldest first. A self-reply whose parent is not in
+    the list (the thread was continued later) is kept as a tweet of its own.
+    """
+    roots: dict[str, Tweet] = {}
+    continuations: dict[str, list[Tweet]] = {}
+    root_of: dict[str, str] = {}
+    for tweet in tweets:
+        parent = tweet.in_reply_to_id
+        if tweet.is_self_reply and parent in root_of:
+            root_id = root_of[parent]
+            continuations[root_id].append(tweet)
+        else:
+            root_id = tweet.id
+            roots[root_id] = tweet
+            continuations[root_id] = []
+        root_of[tweet.id] = root_id
+    return [root.with_thread(continuations[root_id]) for root_id, root in roots.items()]

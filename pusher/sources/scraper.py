@@ -14,8 +14,14 @@ import logging
 import re
 from typing import TYPE_CHECKING, Any, Iterable, Iterator, Protocol
 
-from pusher.models import Media, MediaType, Tweet
-from pusher.sources.base import TweetSource, TweetSourceError, best_mp4_url, expand_urls
+from pusher.models import Media, MediaType, Tweet, merge_threads
+from pusher.sources.base import (
+    TweetSource,
+    TweetSourceError,
+    best_mp4_url,
+    expand_urls,
+    is_allowed,
+)
 
 if TYPE_CHECKING:
     from pusher.config import Config, Feed
@@ -24,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 X_BASE_URL = "https://x.com"
 TIMELINE_URL_PATTERN = re.compile(r"/i/api/graphql/[^/]+/(UserTweets|UserTweetsAndReplies)\b")
+CONVERSATION_URL_PATTERN = re.compile(r"/i/api/graphql/[^/]+/TweetDetail\b")
 LOGIN_URL_MARKERS = ("/login", "/i/flow/login")
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -40,6 +47,11 @@ class ScraperError(TweetSourceError):
 class TimelineFetcher(Protocol):
     def fetch(self, username: str, include_replies: bool) -> list[dict[str, Any]]:
         """Return the raw GraphQL timeline payloads for ``username``."""
+
+    def fetch_conversations(
+        self, username: str, tweet_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        """Return the raw GraphQL conversation payloads of the given tweets."""
 
 
 class PlaywrightTimelineFetcher:
@@ -62,6 +74,21 @@ class PlaywrightTimelineFetcher:
         self._timeout_ms = timeout_seconds * 1000
 
     def fetch(self, username: str, include_replies: bool) -> list[dict[str, Any]]:
+        url = f"{X_BASE_URL}/{username}"
+        if include_replies:
+            url += "/with_replies"
+        return self._capture([url], TIMELINE_URL_PATTERN)
+
+    def fetch_conversations(
+        self, username: str, tweet_ids: list[str]
+    ) -> list[dict[str, Any]]:
+        urls = [f"{X_BASE_URL}/{username}/status/{tweet_id}" for tweet_id in tweet_ids]
+        return self._capture(urls, CONVERSATION_URL_PATTERN)
+
+    def _capture(self, urls: list[str], pattern: re.Pattern[str]) -> list[dict[str, Any]]:
+        """Open each url in one browser session and return the matching payloads."""
+        if not urls:
+            return []
         try:
             from playwright.sync_api import Error as PlaywrightError
             from playwright.sync_api import sync_playwright
@@ -71,41 +98,44 @@ class PlaywrightTimelineFetcher:
                 "pip install -r requirements-scraper.txt && playwright install chromium"
             ) from exc
 
-        url = f"{X_BASE_URL}/{username}"
-        if include_replies:
-            url += "/with_replies"
-
+        url = urls[0]
         try:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(
                     headless=self._headless, executable_path=self._executable_path
                 )
                 try:
-                    return self._capture_timeline(browser, url)
+                    context = browser.new_context(user_agent=USER_AGENT, locale="en-US")
+                    context.add_cookies(self._cookies())
+                    payloads: list[dict[str, Any]] = []
+                    for url in urls:
+                        payloads.extend(self._capture_page(context, url, pattern))
+                    return payloads
                 finally:
                     browser.close()
         except PlaywrightError as exc:
             raise ScraperError(f"Failed to load {url}: {exc}") from exc
 
-    def _capture_timeline(self, browser: Any, url: str) -> list[dict[str, Any]]:
+    def _capture_page(
+        self, context: Any, url: str, pattern: re.Pattern[str]
+    ) -> list[dict[str, Any]]:
         from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-        context = browser.new_context(user_agent=USER_AGENT, locale="en-US")
-        context.add_cookies(self._cookies())
         page = context.new_page()
+        matches = lambda response: bool(pattern.search(response.url))  # noqa: E731
 
         responses: list[Any] = []
-        page.on("response", lambda r: responses.append(r) if _is_timeline(r.url) else None)
+        page.on("response", lambda r: responses.append(r) if matches(r) else None)
 
         try:
-            with page.expect_response(lambda r: _is_timeline(r.url), timeout=self._timeout_ms):
+            with page.expect_response(matches, timeout=self._timeout_ms):
                 page.goto(url, wait_until="domcontentloaded", timeout=self._timeout_ms)
         except PlaywrightTimeoutError as exc:
             if any(marker in page.url for marker in LOGIN_URL_MARKERS):
                 raise ScraperError(
                     "X redirected to the login page; X_AUTH_TOKEN is missing or expired"
                 ) from exc
-            raise ScraperError(f"Timed out waiting for the timeline of {url}") from exc
+            raise ScraperError(f"Timed out waiting for the tweets of {url}") from exc
 
         for _ in range(self._scroll_count):
             page.mouse.wheel(0, SCROLL_PIXELS)
@@ -116,7 +146,8 @@ class PlaywrightTimelineFetcher:
             try:
                 payloads.append(response.json())
             except Exception:  # noqa: BLE001 - a single bad body must not fail the cycle
-                logger.debug("Skipping unreadable timeline response %s", response.url)
+                logger.debug("Skipping unreadable response %s", response.url)
+        page.close()
         return payloads
 
     def _cookies(self) -> list[dict[str, Any]]:
@@ -145,8 +176,11 @@ class ScraperTweetSource(TweetSource):
         mentioned_usernames: Iterable[str] = (),
         include_retweets: bool = False,
         include_replies: bool = True,
+        include_threads: bool = True,
     ) -> None:
-        super().__init__(username, mentioned_usernames, include_retweets, include_replies)
+        super().__init__(
+            username, mentioned_usernames, include_retweets, include_replies, include_threads
+        )
         self._fetcher = fetcher
 
     @classmethod
@@ -165,22 +199,59 @@ class ScraperTweetSource(TweetSource):
             mentioned_usernames=feed.mentioned_usernames,
             include_retweets=feed.include_retweets,
             include_replies=feed.include_replies,
+            include_threads=feed.include_threads,
         )
 
     def initial_since_id(self) -> str | None:
-        tweets = self._load()
+        tweets = self._parse(self._fetcher.fetch(self.username, self.include_replies))
         return tweets[-1].id if tweets else None
 
     def new_tweets(self, since_id: str) -> list[Tweet]:
-        return [tweet for tweet in self._load() if int(tweet.id) > int(since_id)]
-
-    def _load(self) -> list[Tweet]:
         payloads = self._fetcher.fetch(self.username, self.include_replies)
+        tweets = [t for t in self._parse(payloads) if int(t.id) > int(since_id)]
+        if not self.include_threads:
+            return tweets
+
+        known_ids = {tweet.id for tweet in tweets}
+        continuations = [
+            tweet
+            for tweet in self._thread_continuations(tweets, _reply_counts(payloads))
+            if tweet.id not in known_ids and int(tweet.id) > int(since_id)
+        ]
+        return merge_threads(sorted(tweets + continuations, key=lambda t: int(t.id)))
+
+    def _thread_continuations(
+        self, tweets: list[Tweet], reply_counts: dict[str, int]
+    ) -> list[Tweet]:
+        """The account's follow-ups of threads started by the wanted ``tweets``.
+
+        The profile timeline shows only part of a thread, so the page of every
+        new thread-starting tweet that has replies is opened to read the rest.
+        """
+        root_ids = [
+            tweet.id
+            for tweet in tweets
+            if self.wants(tweet)
+            and not tweet.is_retweet
+            and not tweet.is_reply
+            and reply_counts.get(tweet.id, 1) > 0
+        ]
+        if not root_ids:
+            return []
+        payloads = self._fetcher.fetch_conversations(self.username, root_ids)
+        return [
+            tweet
+            for tweet in parse_timeline(payloads, self.username, include_replies=True)
+            if tweet.is_self_reply
+        ]
+
+    def _parse(self, payloads: list[dict[str, Any]]) -> list[Tweet]:
         return parse_timeline(
             payloads,
             self.username,
             include_retweets=self.include_retweets,
             include_replies=self.include_replies,
+            include_threads=self.include_threads,
         )
 
 
@@ -189,21 +260,18 @@ def parse_timeline(
     username: str,
     include_retweets: bool = False,
     include_replies: bool = True,
+    include_threads: bool = False,
 ) -> list[Tweet]:
     """Extract the account's own tweets from GraphQL timeline payloads."""
     tweets: dict[str, Tweet] = {}
     for payload in payloads:
         for result in _iter_tweet_results(payload):
-            legacy = result.get("legacy") or {}
             if _screen_name(result).lower() != username.lower():
                 continue
-            is_retweet = "retweeted_status_result" in legacy
-            if is_retweet and not include_retweets:
-                continue
-            if legacy.get("in_reply_to_status_id_str") and not include_replies:
-                continue
             tweet = parse_tweet_result(result, username)
-            if tweet is not None:
+            if tweet is not None and is_allowed(
+                tweet, include_retweets, include_replies, include_threads
+            ):
                 tweets[tweet.id] = tweet
     return sorted(tweets.values(), key=lambda tweet: int(tweet.id))
 
@@ -215,7 +283,7 @@ def parse_tweet_result(result: dict[str, Any], author_username: str) -> Tweet | 
 
     outer_legacy = result.get("legacy") or {}
     content = result
-    retweeted_username = None
+    retweeted_username = "" if "retweeted_status_result" in outer_legacy else None
     retweeted = _unwrap(outer_legacy.get("retweeted_status_result", {}).get("result"))
     if retweeted:
         content = retweeted
@@ -254,6 +322,8 @@ def parse_tweet_result(result: dict[str, Any], author_username: str) -> Tweet | 
         media=media,
         created_at=outer_legacy.get("created_at"),
         retweeted_username=retweeted_username,
+        in_reply_to_id=outer_legacy.get("in_reply_to_status_id_str") or None,
+        in_reply_to_username=outer_legacy.get("in_reply_to_screen_name") or None,
     )
 
 
@@ -301,5 +371,12 @@ def _screen_name(result: dict[str, Any]) -> str:
     )
 
 
-def _is_timeline(url: str) -> bool:
-    return bool(TIMELINE_URL_PATTERN.search(url))
+def _reply_counts(payloads: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for payload in payloads:
+        for result in _iter_tweet_results(payload):
+            legacy = result.get("legacy") or {}
+            tweet_id = result.get("rest_id") or legacy.get("id_str")
+            if tweet_id and isinstance(legacy.get("reply_count"), int):
+                counts[tweet_id] = legacy["reply_count"]
+    return counts

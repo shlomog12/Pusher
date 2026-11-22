@@ -99,11 +99,17 @@ def test_prefers_note_tweet_and_unwraps_visibility_results():
 
 
 class FakeFetcher:
-    def __init__(self, payloads):
+    def __init__(self, payloads, conversations=()):
         self.payloads = payloads
+        self.conversations = list(conversations)
+        self.conversation_requests = []
 
     def fetch(self, username, include_replies):
         return self.payloads
+
+    def fetch_conversations(self, username, tweet_ids):
+        self.conversation_requests.append(list(tweet_ids))
+        return self.conversations
 
 
 def test_scraper_source_returns_tweets_after_since_id_oldest_first():
@@ -112,3 +118,58 @@ def test_scraper_source_returns_tweets_after_since_id_oldest_first():
 
     assert source.initial_since_id() == "503"
     assert [t.id for t in source.new_tweets("501")] == ["502", "503"]
+
+
+def _self_reply(tweet_id, parent_id, text, author="page", **extra):
+    return _tweet_result(
+        tweet_id, author, text,
+        in_reply_to_status_id_str=parent_id, in_reply_to_screen_name=author, **extra
+    )
+
+
+def test_thread_is_merged_into_one_tweet_using_the_conversation_page():
+    root = _tweet_result("600", "page", "1/ hi @me", mentions=["me"], reply_count=3)
+    other_reply = _tweet_result(
+        "602", "someone", "nice", in_reply_to_status_id_str="600",
+        in_reply_to_screen_name="page",
+    )
+    answer_to_other = _tweet_result(
+        "603", "page", "thanks", in_reply_to_status_id_str="602",
+        in_reply_to_screen_name="someone",
+    )
+    conversation = _payload(
+        root,
+        _self_reply("601", "600", "2/ more", media=[PHOTO]),
+        other_reply,
+        answer_to_other,
+        _self_reply("604", "601", "3/ end"),
+    )
+    fetcher = FakeFetcher([_payload(root)], [conversation])
+    source = ScraperTweetSource("page", fetcher, mentioned_usernames=["me"], include_replies=False)
+
+    [thread] = source.new_tweets("500")
+
+    assert fetcher.conversation_requests == [["600"]]
+    assert thread.id == "600"
+    assert thread.text == "1/ hi @me\n\n2/ more\n\n3/ end"
+    assert [m.type for m in thread.media] == [MediaType.PHOTO]
+    assert thread.last_id == "604"
+    assert source.wants(thread)
+
+
+def test_conversation_page_is_skipped_for_tweets_without_replies():
+    root = _tweet_result("700", "page", "solo", reply_count=0)
+    fetcher = FakeFetcher([_payload(root)])
+    source = ScraperTweetSource("page", fetcher, include_replies=False)
+
+    assert [t.id for t in source.new_tweets("500")] == ["700"]
+    assert fetcher.conversation_requests == []
+
+
+def test_without_threads_self_replies_are_replies():
+    payload = _payload(_tweet_result("800", "page", "a"), _self_reply("801", "800", "b"))
+    source = ScraperTweetSource(
+        "page", FakeFetcher([payload]), include_replies=False, include_threads=False
+    )
+
+    assert [t.text for t in source.new_tweets("500")] == ["a"]

@@ -17,6 +17,11 @@ class TweetSource(ABC):
 
     When ``mentioned_usernames`` is set, only tweets that tag one of those
     accounts are wanted; otherwise every tweet of the account is.
+
+    With ``include_threads``, the account's replies to its own tweets are not
+    treated as replies: they are merged into the tweet that starts the thread
+    (see :func:`pusher.models.merge_threads`), so a thread is reported as one
+    tweet. A thread is wanted when any of its tweets is.
     """
 
     def __init__(
@@ -25,6 +30,7 @@ class TweetSource(ABC):
         mentioned_usernames: Iterable[str] = (),
         include_retweets: bool = False,
         include_replies: bool = True,
+        include_threads: bool = True,
     ) -> None:
         self.username = username
         self.mentioned_usernames = tuple(
@@ -32,6 +38,13 @@ class TweetSource(ABC):
         )
         self.include_retweets = include_retweets
         self.include_replies = include_replies
+        self.include_threads = include_threads
+
+    def keeps(self, tweet: Tweet) -> bool:
+        """Whether the retweet, reply and thread settings allow ``tweet``."""
+        return is_allowed(
+            tweet, self.include_retweets, self.include_replies, self.include_threads
+        )
 
     def wants(self, tweet: Tweet) -> bool:
         return not self.mentioned_usernames or any(
@@ -48,7 +61,26 @@ class TweetSource(ABC):
 
     @abstractmethod
     def new_tweets(self, since_id: str) -> list[Tweet]:
-        """Return tweets newer than ``since_id``, ordered oldest first."""
+        """Return tweets newer than ``since_id``, ordered oldest first.
+
+        With ``include_threads``, each thread is returned as a single merged
+        tweet whose :attr:`~pusher.models.Tweet.last_id` is its newest tweet.
+        """
+
+
+def is_allowed(
+    tweet: Tweet, include_retweets: bool, include_replies: bool, include_threads: bool
+) -> bool:
+    """Whether ``tweet`` passes the retweet and reply settings.
+
+    With ``include_threads``, a reply to the author's own tweet is part of a
+    thread rather than a reply, so it is kept even without ``include_replies``.
+    """
+    if tweet.is_retweet and not include_retweets:
+        return False
+    if tweet.is_reply and not include_replies:
+        return include_threads and tweet.is_self_reply
+    return True
 
 
 def best_mp4_url(variants: list[dict[str, Any]]) -> str | None:

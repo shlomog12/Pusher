@@ -3,7 +3,12 @@ import json
 import pytest
 
 from pusher.models import Media, MediaType, Tweet
-from pusher.telegram_client import MAX_CAPTION_LENGTH, TelegramClient, format_tweet
+from pusher.telegram_client import (
+    MAX_CAPTION_LENGTH,
+    MAX_MESSAGE_LENGTH,
+    TelegramClient,
+    split_text,
+)
 
 
 class FakeResponse:
@@ -110,18 +115,41 @@ def test_falls_back_to_links_when_upload_fails():
     assert VIDEO.url in session.posts[2]["data"]["text"]
 
 
-def test_format_tweet_escapes_html_and_respects_limit():
-    tweet = _tweet(text="<b>&</b> " * 2000)
-    formatted = format_tweet(tweet, max_length=500)
+def test_split_text_escapes_html_and_respects_limit():
+    parts = split_text("<b>&</b> " * 2000, limit=500)
 
-    assert len(formatted) <= 500
-    assert "<b>&</b>" not in formatted
-    assert formatted.endswith("…")
+    assert len(parts) > 1
+    assert all(len(part) <= 500 for part in parts)
+    assert all("<b>" not in part for part in parts)
+    assert "".join(parts).count("&amp;") == 2000
 
+
+def test_split_text_prefers_paragraph_breaks():
+    first, second = "a" * 300, "b" * 300
+    assert split_text(f"{first}\n\n{second}", limit=400) == [first, second]
 
 
 def test_message_is_only_the_tweet_text():
-    assert format_tweet(_tweet()) == "hello @me"
+    assert split_text(_tweet().text) == ["hello @me"]
+
+
+def test_long_thread_text_is_split_into_several_messages(session):
+    tweet = _tweet(text="\n\n".join(["word " * 100] * 20))
+    TelegramClient("token", "42", session=session).send_tweet(tweet)
+
+    texts = [p["data"]["text"] for p in session.posts]
+    assert len(texts) > 1
+    assert all(len(text) <= MAX_MESSAGE_LENGTH for text in texts)
+    assert sum(text.count("word") for text in texts) == 2000
+
+
+def test_more_than_ten_media_are_sent_as_several_albums(session):
+    tweet = _tweet(media=(PHOTO,) * 11)
+    TelegramClient("token", "42", session=session).send_tweet(tweet)
+
+    assert [p["method"] for p in session.posts] == ["sendMediaGroup", "sendPhoto"]
+    assert len(json.loads(session.posts[0]["data"]["media"])) == 10
+    assert "caption" not in session.posts[1]["data"]
 
 
 def test_media_only_tweet_is_sent_without_caption(session):

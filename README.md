@@ -13,6 +13,11 @@ someone had sent it to you directly.
    - the watched account (`TWITTER_WATCHED_USERNAME`), keeping only tweets that
      tag one of `TWITTER_MENTIONED_USERNAMES`
    - replies are skipped for both unless `INCLUDE_REPLIES=true`
+   - threads (the account replying to its own tweet) are merged into one
+     tweet: the text of all its tweets, separated by blank lines, and all their
+     media. A thread is forwarded when any of its tweets matches (e.g. only the
+     first one tags you). Replies by other people are never included. Turn this
+     off with `INCLUDE_THREADS=false`
    - with `FORWARD_MY_TWEETS=true`, your own account (`TWITTER_MY_USERNAME`),
      keeping all your tweets, plus your retweets when
      `FORWARD_MY_RETWEETS=true`
@@ -22,6 +27,9 @@ someone had sent it to you directly.
    - one photo / video / GIF → `sendPhoto` / `sendVideo` / `sendAnimation` with the text as caption
    - several media → an album (`sendMediaGroup`)
    - text over Telegram's 1024-character caption limit → the text goes in its own message, followed by the media
+   - Telegram's own limits can't be avoided for long threads: text over 4096
+     characters is split into several messages (between tweets where possible),
+     and more than 10 media items are sent as several albums
 3. Media is first sent by URL. If Telegram can't fetch it (Telegram fetches files
    up to 20 MB by URL), the bot downloads the file and uploads it (up to 50 MB).
    If that fails too, it sends the media as links.
@@ -51,6 +59,8 @@ only takes a change in `.env`.
 - Each check reads the most recent tweets on the profile, plus
   `SCRAPER_SCROLLS` scrolls. If the account posts more tweets between two checks
   than that covers, increase `SCRAPER_SCROLLS` or shorten the poll interval.
+- For each new tweet that starts a thread (it has replies), the scraper also
+  opens the tweet's page to read the rest of the thread.
 - With `FORWARD_MY_TWEETS`, each check loads your profile too, in a second
   browser session.
 - Install the extra dependencies: `pip install -r requirements-scraper.txt`
@@ -96,6 +106,7 @@ TweetSourceFactory.register("rss", RssTweetSource.from_config)
 | `POLL_INTERVAL_SECONDS` | no | `300` | Seconds between checks |
 | `INCLUDE_RETWEETS` | no | `false` | Also check the watched account's retweets |
 | `INCLUDE_REPLIES` | no | `false` | Also forward replies, from the watched account and from you |
+| `INCLUDE_THREADS` | no | `true` | Send a thread as one message with the rest of its tweets |
 | `STATE_FILE` | no | `state.json` | Where the last processed tweet id is stored |
 | `LOG_LEVEL` | no | `INFO` | Logging level |
 
@@ -108,6 +119,14 @@ TweetSourceFactory.register("rss", RssTweetSource.from_config)
   for tweets that are forwarded, not for everything the account posts. Empty
   checks return no posts. With `FORWARD_MY_TWEETS`, each of your own tweets is
   billed as well, and a retweet may also bill the original tweet it includes.
+- With `INCLUDE_THREADS` (the default), one extra search per check loads the
+  rest of the threads started by the forwarded tweets
+  (`conversation_id:<id> from:<account> is:reply`, up to 10 threads per
+  search). Their tweets, and the account's replies to other people in those
+  conversations, are billed too.
+- A thread is read when its first tweet is forwarded. Tweets added to it after
+  that check come in later as separate messages; for the watched account, only
+  if they tag you themselves.
 - The first run needs no API reads: the starting point is a tweet id computed
   from the current time.
 - Recent search covers the last 7 days. If the bot was down for longer than

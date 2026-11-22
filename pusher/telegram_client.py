@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 API_BASE_URL = "https://api.telegram.org"
 MAX_MESSAGE_LENGTH = 4096
 MAX_CAPTION_LENGTH = 1024
+MAX_GROUP_SIZE = 10
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 # A host may resolve to an IPv6 address that never answers; a short connect
@@ -48,30 +49,48 @@ class TelegramClient:
         self._timeout = (CONNECT_TIMEOUT_SECONDS, timeout)
 
     def send_tweet(self, tweet: Tweet) -> None:
-        text = format_tweet(tweet)
+        """Send the tweet in as few messages as Telegram allows.
+
+        That is one message, unless the text (e.g. of a long thread) is over
+        Telegram's limits, or there are more than 10 media items for one album.
+        """
+        texts = split_text(tweet.text)
         if not tweet.media:
             # Telegram rejects empty messages; a tweet without text or media is rare.
-            self.send_message(text or html.escape(tweet.url))
+            for text in texts or [html.escape(tweet.url)]:
+                self.send_message(text)
             return
 
-        caption: str | None = text or None
-        if len(text) > MAX_CAPTION_LENGTH:
-            self.send_message(text)
-            caption = None
+        caption: str | None = None
+        if len(texts) == 1 and len(texts[0]) <= MAX_CAPTION_LENGTH:
+            caption = texts[0]
+        else:
+            for text in texts:
+                self.send_message(text)
 
+        groups = [
+            tweet.media[start:start + MAX_GROUP_SIZE]
+            for start in range(0, len(tweet.media), MAX_GROUP_SIZE)
+        ]
+        for index, group in enumerate(groups):
+            self._send_media_with_fallback(group, caption if index == 0 else None)
+
+    def _send_media_with_fallback(
+        self, media: tuple[Media, ...], caption: str | None
+    ) -> None:
         try:
-            self._send_media(tweet.media, caption, upload=False)
+            self._send_media(media, caption, upload=False)
             return
         except (TelegramApiError, requests.RequestException) as exc:
             logger.info("Sending media by URL failed (%s), uploading instead", exc)
 
         try:
-            self._send_media(tweet.media, caption, upload=True)
+            self._send_media(media, caption, upload=True)
             return
         except (TelegramApiError, requests.RequestException) as exc:
             logger.warning("Uploading media failed (%s), sending links only", exc)
 
-        self.send_message(format_media_fallback(tweet, include_text=caption is not None))
+        self.send_message(format_media_links(media, caption))
 
     def send_message(self, text: str) -> None:
         self._call(
@@ -179,32 +198,47 @@ class TelegramClient:
         return payload
 
 
-def format_tweet(tweet: Tweet, max_length: int = MAX_MESSAGE_LENGTH) -> str:
-    """The tweet's text as a plain message, HTML-escaped and cut to ``max_length``."""
-    return _escape_within(tweet.text, max_length)
-
-
-def format_media_fallback(tweet: Tweet, include_text: bool) -> str:
+def format_media_links(media: tuple[Media, ...], text: str | None = None) -> str:
+    """Links to the media, after ``text`` (already HTML-escaped) when given."""
     links = "\n".join(
         f'<a href="{html.escape(item.url)}">{item.type.value} {index}</a>'
-        for index, item in enumerate(tweet.media, start=1)
+        for index, item in enumerate(media, start=1)
     )
-    text = format_tweet(tweet) if include_text else ""
     return f"{text}\n\n{links}" if text else links
 
 
-def _escape_within(text: str, limit: int) -> str:
-    """HTML-escape ``text``, truncating the plain text so the result fits ``limit``."""
-    escaped = html.escape(text)
-    if len(escaped) <= limit:
-        return escaped
-    # Escaping can lengthen the text a lot (e.g. "&" -> "&amp;"), so search for
-    # the longest prefix that still fits together with the ellipsis.
-    low, high = 0, len(text)
+def split_text(text: str, limit: int = MAX_MESSAGE_LENGTH) -> list[str]:
+    """HTML-escape ``text`` and split it into parts of at most ``limit`` characters.
+
+    Parts end at a paragraph break (e.g. between the tweets of a thread) where
+    possible, otherwise at a line break or a space.
+    """
+    parts = []
+    rest = text.strip()
+    while rest:
+        escaped = html.escape(rest)
+        if len(escaped) <= limit:
+            parts.append(escaped)
+            break
+        cut = _longest_fitting_prefix(rest, limit)
+        for separator in ("\n\n", "\n", " "):
+            position = rest.rfind(separator, 0, cut + len(separator))
+            # Don't settle for a tiny first part just to end at a separator.
+            if position > cut // 2:
+                cut = position
+                break
+        parts.append(html.escape(rest[:cut].rstrip()))
+        rest = rest[cut:].strip()
+    return parts
+
+
+def _longest_fitting_prefix(text: str, limit: int) -> int:
+    """Length of the longest prefix of ``text`` whose escaped form fits ``limit``."""
+    low, high = 1, len(text)
     while low < high:
         mid = (low + high + 1) // 2
-        if len(html.escape(text[:mid].rstrip())) + 1 <= limit:
+        if len(html.escape(text[:mid].rstrip())) <= limit:
             low = mid
         else:
             high = mid - 1
-    return html.escape(text[:low].rstrip()) + "…" if low else ""
+    return low

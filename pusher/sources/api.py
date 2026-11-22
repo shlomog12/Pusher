@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Iterable
 
 import requests
 
-from pusher.models import Media, MediaType, Tweet
+from pusher.models import Media, MediaType, Tweet, merge_threads
 from pusher.sources.base import TweetSource, TweetSourceError, best_mp4_url, expand_urls
 
 if TYPE_CHECKING:
@@ -21,7 +21,10 @@ logger = logging.getLogger(__name__)
 
 API_BASE_URL = "https://api.x.com/2"
 SEARCH_PATH = "/tweets/search/recent"
-TWEET_FIELDS = "created_at,entities,attachments,note_tweet,referenced_tweets"
+TWEET_FIELDS = (
+    "author_id,created_at,entities,attachments,note_tweet,referenced_tweets,"
+    "in_reply_to_user_id"
+)
 MEDIA_FIELDS = "type,url,preview_image_url,variants"
 # The retweeted tweet, its media and its author, so retweets are sent in full
 # rather than as X's truncated "RT @user: ..." text.
@@ -34,6 +37,9 @@ EXPANSIONS = ",".join([
 USER_FIELDS = "username"
 RETWEET_PREFIX = re.compile(r"^RT @(\w+):")
 MAX_RESULTS_PER_PAGE = 100
+# Threads are loaded with one search for several conversations at a time,
+# keeping the query well inside X's query length limit.
+CONVERSATIONS_PER_QUERY = 10
 MAX_RATE_LIMIT_WAIT_SECONDS = 15 * 60
 # A host may resolve to an IPv6 address that never answers; a short connect
 # timeout makes requests fall back to the next (IPv4) address quickly instead
@@ -69,10 +75,13 @@ class ApiTweetSource(TweetSource):
         mentioned_usernames: Iterable[str] = (),
         include_retweets: bool = False,
         include_replies: bool = True,
+        include_threads: bool = True,
         session: requests.Session | None = None,
         timeout: float = 30.0,
     ) -> None:
-        super().__init__(username, mentioned_usernames, include_retweets, include_replies)
+        super().__init__(
+            username, mentioned_usernames, include_retweets, include_replies, include_threads
+        )
         self._session = session or requests.Session()
         self._session.headers.update({"Authorization": f"Bearer {bearer_token}"})
         self._timeout = (CONNECT_TIMEOUT_SECONDS, timeout)
@@ -85,6 +94,7 @@ class ApiTweetSource(TweetSource):
             mentioned_usernames=feed.mentioned_usernames,
             include_retweets=feed.include_retweets,
             include_replies=feed.include_replies,
+            include_threads=feed.include_threads,
         )
 
     def initial_since_id(self) -> str:
@@ -93,8 +103,41 @@ class ApiTweetSource(TweetSource):
         return snowflake_from_datetime(datetime.now(timezone.utc))
 
     def new_tweets(self, since_id: str) -> list[Tweet]:
+        tweets = self._search_since(self.search_query(), since_id)
+        if not self.include_threads:
+            return tweets
+
+        known_ids = {tweet.id for tweet in tweets}
+        continuations = [
+            tweet
+            for tweet in self._thread_continuations(tweets)
+            if tweet.id not in known_ids and tweet.is_self_reply
+        ]
+        merged = sorted(tweets + continuations, key=lambda tweet: int(tweet.id))
+        return merge_threads(merged)
+
+    def _thread_continuations(self, tweets: list[Tweet]) -> list[Tweet]:
+        """The account's follow-ups of the threads started by the wanted ``tweets``.
+
+        The search query skips tweets that don't tag the mentioned accounts and,
+        without ``include_replies``, all replies, so the rest of a thread is
+        loaded with one search per batch of thread-starting tweets.
+        """
+        roots = [t for t in tweets if self.wants(t) and not t.is_retweet and not t.is_reply]
+        continuations: list[Tweet] = []
+        for start in range(0, len(roots), CONVERSATIONS_PER_QUERY):
+            batch = roots[start:start + CONVERSATIONS_PER_QUERY]
+            conversations = " OR ".join(f"conversation_id:{t.id}" for t in batch)
+            if len(batch) > 1:
+                conversations = f"({conversations})"
+            query = f"from:{self.username} is:reply {conversations}"
+            oldest = min(batch, key=lambda t: int(t.id))
+            continuations.extend(self._search_since(query, oldest.id))
+        return continuations
+
+    def _search_since(self, query: str, since_id: str) -> list[Tweet]:
         params: dict[str, Any] = {
-            "query": self.search_query(),
+            "query": query,
             "since_id": since_id,
             "max_results": MAX_RESULTS_PER_PAGE,
             "tweet.fields": TWEET_FIELDS,
@@ -242,14 +285,33 @@ def parse_tweet(
         media=media,
         created_at=raw.get("created_at"),
         retweeted_username=retweeted_username,
+        in_reply_to_id=_referenced_id(raw, "replied_to"),
+        in_reply_to_username=_reply_target(raw, author_username, users_by_id),
     )
 
 
 def _retweeted_id(raw: dict[str, Any]) -> str | None:
+    return _referenced_id(raw, "retweeted")
+
+
+def _referenced_id(raw: dict[str, Any], kind: str) -> str | None:
     for reference in raw.get("referenced_tweets") or []:
-        if reference.get("type") == "retweeted":
+        if reference.get("type") == kind:
             return reference.get("id")
     return None
+
+
+def _reply_target(
+    raw: dict[str, Any],
+    author_username: str,
+    users_by_id: dict[str, dict[str, Any]] | None,
+) -> str | None:
+    user_id = raw.get("in_reply_to_user_id")
+    if not user_id:
+        return None
+    if user_id == raw.get("author_id"):
+        return author_username
+    return (users_by_id or {}).get(user_id, {}).get("username")
 
 
 def parse_media(raw: dict[str, Any]) -> Media | None:

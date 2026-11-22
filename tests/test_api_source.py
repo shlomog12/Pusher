@@ -219,3 +219,35 @@ def test_snowflake_round_trip_and_epoch():
     )
     moment = datetime(2026, 11, 22, 12, 0, tzinfo=timezone.utc)
     assert datetime_from_snowflake(snowflake_from_datetime(moment)) == moment
+
+
+def test_thread_continuations_are_loaded_and_merged():
+    root = {"id": "200", "author_id": "1", "text": "1/ hi @me",
+            "entities": {"mentions": [{"username": "me"}]}}
+    continuation = {
+        "id": "201", "author_id": "1", "in_reply_to_user_id": "1", "text": "2/ more",
+        "referenced_tweets": [{"type": "replied_to", "id": "200"}],
+    }
+    reply_to_other = {
+        "id": "202", "author_id": "1", "in_reply_to_user_id": "5", "text": "thanks",
+        "referenced_tweets": [{"type": "replied_to", "id": "150"}],
+    }
+    session = FakeSession([
+        FakeResponse(200, {"data": [root]}),
+        FakeResponse(200, {"data": [reply_to_other, continuation]}),
+    ])
+
+    [thread] = _source(session, include_replies=False).new_tweets("100")
+
+    assert thread.text == "1/ hi @me\n\n2/ more"
+    assert thread.last_id == "201"
+    _, params = session.calls[1]
+    assert params["query"] == "from:Page is:reply conversation_id:200"
+    assert params["since_id"] == "200"
+
+
+def test_threads_can_be_turned_off():
+    session = FakeSession([_page(["200"])])
+    _source(session, include_threads=False).new_tweets("100")
+
+    assert len(session.calls) == 1
