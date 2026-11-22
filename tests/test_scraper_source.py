@@ -108,5 +108,5 @@ def test_scraper_source_returns_tweets_after_since_id_oldest_first():
     payload = _payload(*(_tweet_result(i, "page", "t") for i in ("503", "501", "502")))
     source = ScraperTweetSource("page", FakeFetcher([payload, payload]))
 
-    assert source.latest_tweet_id() == "503"
+    assert source.initial_since_id() == "503"
     assert [t.id for t in source.new_tweets("501")] == ["502", "503"]

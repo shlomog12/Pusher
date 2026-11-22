@@ -26,8 +26,12 @@ class TweetSource(ABC):
         self.include_replies = include_replies
 
     @abstractmethod
-    def latest_tweet_id(self) -> str | None:
-        """Return the id of the newest tweet, or ``None`` if there are no tweets."""
+    def initial_since_id(self) -> str | None:
+        """Return the id to start watching from on the first run.
+
+        Only tweets with a larger id are reported by :meth:`new_tweets`.
+        ``None`` means no starting point could be determined yet.
+        """
 
     @abstractmethod
     def new_tweets(self, since_id: str) -> list[Tweet]:

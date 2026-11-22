@@ -36,13 +36,13 @@ class MentionForwarder:
         watched = self._config.watched_username
         since_id = self._state.load_last_tweet_id(watched)
         if since_id is None:
-            latest = self._source.latest_tweet_id()
-            if latest:
-                self._state.save_last_tweet_id(watched, latest)
+            start_id = self._source.initial_since_id()
+            if start_id:
+                self._state.save_last_tweet_id(watched, start_id)
             logger.info(
-                "First run for @%s: starting from tweet %s, older tweets are skipped",
+                "First run for @%s: starting from tweet id %s, older tweets are skipped",
                 watched,
-                latest,
+                start_id,
             )
             return 0
 

@@ -18,8 +18,8 @@ the tweet, and its photos, videos and GIFs.
    up to 20 MB by URL), the bot downloads the file and uploads it (up to 50 MB).
    If that fails too, it sends the media as links.
 4. The id of the last processed tweet is saved to `STATE_FILE`, so restarting
-   doesn't send duplicates. On the very first run the bot only records the
-   newest tweet and doesn't forward older ones.
+   doesn't send duplicates. On the very first run the bot only records a
+   starting point and doesn't forward older tweets.
 
 ## Tweet sources
 
@@ -30,7 +30,7 @@ only takes a change in `.env`.
 
 | `TWEET_SOURCE` | Class | How it loads tweets | Needs |
 | --- | --- | --- | --- |
-| `api` (default) | `ApiTweetSource` | Official X API v2 user timeline endpoint | A bearer token on a paid tier (Basic or higher) |
+| `api` (default) | `ApiTweetSource` | Official X API v2 recent search for `from:<watched> @<you>` | A bearer token with pay-per-use credits |
 | `scraper` | `ScraperTweetSource` | Headless Chromium (Playwright) opens the profile on x.com and reads the GraphQL timeline responses the page loads | The `auth_token` cookie of a logged-in X account |
 
 ### Scraper notes
@@ -48,7 +48,7 @@ only takes a change in `.env`.
 
 ### Adding a source
 
-Subclass `TweetSource`, implement `latest_tweet_id()` and `new_tweets()`, and
+Subclass `TweetSource`, implement `initial_since_id()` and `new_tweets()`, and
 register it:
 
 ```python
@@ -84,9 +84,18 @@ TweetSourceFactory.register("rss", RssTweetSource.from_config)
 | `STATE_FILE` | no | `state.json` | Where the last processed tweet id is stored |
 | `LOG_LEVEL` | no | `INFO` | Logging level |
 
-With the API source, keep the poll interval within your tier's rate limits. If
-the API returns 429, the bot waits for the rate-limit window to reset and then
-continues.
+### API source notes
+
+- X bills the API per post returned. The search query only matches tweets of the
+  watched account that tag you, so you pay only for tweets that are forwarded,
+  not for everything the account posts. Empty checks return no posts.
+- The first run needs no API reads: the starting point is a tweet id computed
+  from the current time.
+- Recent search covers the last 7 days. If the bot was down for longer than
+  that, it resumes from the oldest point the endpoint allows, so tweets older
+  than 7 days are skipped.
+- If the API returns 429 (rate limit), the bot waits for the rate-limit window
+  to reset and then continues.
 
 ## Running
 

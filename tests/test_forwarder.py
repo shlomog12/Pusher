@@ -11,7 +11,7 @@ class FakeSource(TweetSource):
         self.tweets = tweets
         self.latest = latest
 
-    def latest_tweet_id(self):
+    def initial_since_id(self):
         return self.latest
 
     def new_tweets(self, since_id):

@@ -165,7 +165,7 @@ class ScraperTweetSource(TweetSource):
             include_replies=config.include_replies,
         )
 
-    def latest_tweet_id(self) -> str | None:
+    def initial_since_id(self) -> str | None:
         tweets = self._load()
         return tweets[-1].id if tweets else None
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 import requests
@@ -18,20 +19,38 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 API_BASE_URL = "https://api.x.com/2"
+SEARCH_PATH = "/tweets/search/recent"
 TWEET_FIELDS = "created_at,entities,attachments,note_tweet,referenced_tweets"
 MEDIA_FIELDS = "type,url,preview_image_url,variants"
 MAX_RESULTS_PER_PAGE = 100
 MAX_RATE_LIMIT_WAIT_SECONDS = 15 * 60
 
+# Recent search only covers the last 7 days; stay a little inside that window.
+SEARCH_WINDOW = timedelta(days=7) - timedelta(minutes=5)
+TWITTER_EPOCH_MS = 1288834974657
+SNOWFLAKE_TIMESTAMP_SHIFT = 22
+
 
 class TwitterApiError(TweetSourceError):
     """Raised when the X API returns an unexpected response."""
 
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
 
 class ApiTweetSource(TweetSource):
+    """Loads tweets through the X API v2 recent search endpoint.
+
+    The search query only matches tweets of the watched account that mention
+    ``mention_username``, so with X's pay-per-use pricing only those tweets are
+    billed rather than every tweet the account publishes.
+    """
+
     def __init__(
         self,
         username: str,
+        mention_username: str,
         bearer_token: str,
         include_retweets: bool = False,
         include_replies: bool = True,
@@ -39,41 +58,63 @@ class ApiTweetSource(TweetSource):
         timeout: float = 30.0,
     ) -> None:
         super().__init__(username, include_retweets, include_replies)
+        self.mention_username = mention_username
         self._session = session or requests.Session()
         self._session.headers.update({"Authorization": f"Bearer {bearer_token}"})
         self._timeout = timeout
-        self._user_id: str | None = None
 
     @classmethod
     def from_config(cls, config: "Config") -> "ApiTweetSource":
         return cls(
             username=config.watched_username,
+            mention_username=config.my_username,
             bearer_token=config.require("twitter_bearer_token", "TWITTER_BEARER_TOKEN"),
             include_retweets=config.include_retweets,
             include_replies=config.include_replies,
         )
 
-    def latest_tweet_id(self) -> str | None:
-        payload = self._get(
-            f"/users/{self._resolve_user_id()}/tweets",
-            params={"max_results": 5, **self._exclude_param()},
-        )
-        return payload.get("meta", {}).get("newest_id")
+    def initial_since_id(self) -> str:
+        # A tweet id derived from the current time costs no API reads: every
+        # tweet posted from now on has a larger id.
+        return snowflake_from_datetime(datetime.now(timezone.utc))
 
     def new_tweets(self, since_id: str) -> list[Tweet]:
         params: dict[str, Any] = {
+            "query": self.search_query(),
             "since_id": since_id,
             "max_results": MAX_RESULTS_PER_PAGE,
             "tweet.fields": TWEET_FIELDS,
             "expansions": "attachments.media_keys",
             "media.fields": MEDIA_FIELDS,
-            **self._exclude_param(),
         }
+        try:
+            tweets = self._search(params)
+        except TwitterApiError as exc:
+            if exc.status_code != 400:
+                raise
+            # since_id is older than the search window (e.g. after a long
+            # downtime); fall back to the oldest time the endpoint accepts.
+            logger.warning("since_id %s was rejected, searching by start time", since_id)
+            params.pop("since_id")
+            params["start_time"] = _search_start_time(since_id)
+            tweets = [t for t in self._search(params) if int(t.id) > int(since_id)]
 
+        tweets.sort(key=lambda tweet: int(tweet.id))
+        return tweets
+
+    def search_query(self) -> str:
+        terms = [f"from:{self.username}", f"@{self.mention_username}"]
+        if not self.include_retweets:
+            terms.append("-is:retweet")
+        if not self.include_replies:
+            terms.append("-is:reply")
+        return " ".join(terms)
+
+    def _search(self, params: dict[str, Any]) -> list[Tweet]:
+        params = dict(params)
         tweets: list[Tweet] = []
-        path = f"/users/{self._resolve_user_id()}/tweets"
         while True:
-            payload = self._get(path, params=params)
+            payload = self._get(SEARCH_PATH, params=params)
             media_by_key = {
                 item["media_key"]: item
                 for item in payload.get("includes", {}).get("media", [])
@@ -84,30 +125,8 @@ class ApiTweetSource(TweetSource):
             )
             next_token = payload.get("meta", {}).get("next_token")
             if not next_token:
-                break
-            params["pagination_token"] = next_token
-
-        tweets.sort(key=lambda tweet: int(tweet.id))
-        return tweets
-
-    def _resolve_user_id(self) -> str:
-        if self._user_id is None:
-            payload = self._get(f"/users/by/username/{self.username}")
-            try:
-                self._user_id = payload["data"]["id"]
-            except KeyError as exc:
-                raise TwitterApiError(
-                    f"User @{self.username} was not found: {payload}"
-                ) from exc
-        return self._user_id
-
-    def _exclude_param(self) -> dict[str, str]:
-        excluded = []
-        if not self.include_retweets:
-            excluded.append("retweets")
-        if not self.include_replies:
-            excluded.append("replies")
-        return {"exclude": ",".join(excluded)} if excluded else {}
+                return tweets
+            params["next_token"] = next_token
 
     def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         url = f"{API_BASE_URL}{path}"
@@ -121,7 +140,8 @@ class ApiTweetSource(TweetSource):
                 continue
             if response.status_code >= 400:
                 raise TwitterApiError(
-                    f"GET {path} failed with {response.status_code}: {response.text}"
+                    f"GET {path} failed with {response.status_code}: {response.text}",
+                    status_code=response.status_code,
                 )
             return response.json()
 
@@ -134,6 +154,22 @@ class ApiTweetSource(TweetSource):
         wait = min(wait, MAX_RATE_LIMIT_WAIT_SECONDS)
         logger.warning("X API rate limit reached, waiting %.0f seconds", wait)
         time.sleep(wait)
+
+
+def snowflake_from_datetime(moment: datetime) -> str:
+    milliseconds = int(moment.timestamp() * 1000) - TWITTER_EPOCH_MS
+    return str(milliseconds << SNOWFLAKE_TIMESTAMP_SHIFT)
+
+
+def datetime_from_snowflake(tweet_id: str) -> datetime:
+    milliseconds = (int(tweet_id) >> SNOWFLAKE_TIMESTAMP_SHIFT) + TWITTER_EPOCH_MS
+    return datetime.fromtimestamp(milliseconds / 1000, tz=timezone.utc)
+
+
+def _search_start_time(since_id: str) -> str:
+    earliest = datetime.now(timezone.utc) - SEARCH_WINDOW
+    start = max(datetime_from_snowflake(since_id), earliest)
+    return start.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def parse_tweet(
