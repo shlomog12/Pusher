@@ -12,7 +12,13 @@ from typing import TYPE_CHECKING, Any, Iterable
 import requests
 
 from pusher.models import Media, MediaType, Tweet, merge_threads
-from pusher.sources.base import TweetSource, TweetSourceError, best_mp4_url, expand_urls
+from pusher.sources.base import (
+    TweetSource,
+    TweetSourceError,
+    best_mp4_url,
+    expand_urls,
+    strip_credit_lines,
+)
 
 if TYPE_CHECKING:
     from pusher.config import Config, Feed
@@ -280,7 +286,9 @@ def parse_tweet(
     return Tweet(
         id=raw["id"],
         author_username=author_username,
-        text=html.unescape(expand_urls(text, entities.get("urls", []), set())).strip(),
+        text=strip_credit_lines(
+            html.unescape(expand_urls(text, entities.get("urls", []), set()))
+        ),
         mentions=frozenset(mentions),
         media=media,
         created_at=raw.get("created_at"),

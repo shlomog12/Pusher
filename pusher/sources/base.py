@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from typing import Any, Iterable
 
@@ -81,6 +82,38 @@ def is_allowed(
     if tweet.is_reply and not include_replies:
         return include_threads and tweet.is_self_reply
     return True
+
+
+# A word that may join the tags of a credit line, e.g. "#news with @anchor".
+_CREDIT_CONNECTORS = {"עם", "ו", "and", "with", "via", "|", "-", "–", "—", "·", "•", ","}
+# A hashtag or mention, also with the Hebrew "and" prefix ("ו@name").
+_TAG = re.compile(r"ו?[#@]\w+[,.]?")
+_HASHTAG = re.compile(r"#\w+")
+
+
+def is_credit_line(line: str) -> bool:
+    """Whether ``line`` holds only hashtags and mentions, with at least one hashtag.
+
+    For example ``#newsroom with @anchor``. A line with any other word is
+    regular text and is never treated as a credit.
+    """
+    tokens = line.split()
+    return (
+        bool(_HASHTAG.search(line))
+        and all(_TAG.fullmatch(token) or token in _CREDIT_CONNECTORS for token in tokens)
+    )
+
+
+def strip_credit_lines(text: str) -> str:
+    """Remove credit lines (see :func:`is_credit_line`) from the end of ``text``.
+
+    Only whole lines at the very end are removed, and never all of the text: a
+    tweet made only of hashtags is kept as it is.
+    """
+    lines = text.strip().split("\n")
+    while lines and (not lines[-1].strip() or is_credit_line(lines[-1])):
+        lines.pop()
+    return "\n".join(lines).rstrip() if lines else text.strip()
 
 
 def best_mp4_url(variants: list[dict[str, Any]]) -> str | None:

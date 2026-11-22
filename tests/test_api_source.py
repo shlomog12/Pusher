@@ -251,3 +251,15 @@ def test_threads_can_be_turned_off():
     _source(session, include_threads=False).new_tweets("100")
 
     assert len(session.calls) == 1
+
+
+def test_credit_line_is_stripped_but_its_mentions_still_count():
+    raw = {
+        "id": "300",
+        "text": "the news\n\n#newsroom with @me",
+        "entities": {"mentions": [{"username": "me"}]},
+    }
+    tweet = parse_tweet(raw, "page", {})
+
+    assert tweet.text == "the news"
+    assert tweet.mentions_user("me")

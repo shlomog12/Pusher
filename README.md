@@ -21,6 +21,12 @@ someone had sent it to you directly.
    - with `FORWARD_MY_TWEETS=true`, your own account (`TWITTER_MY_USERNAME`),
      keeping all your tweets, plus your retweets when
      `FORWARD_MY_RETWEETS=true`
+   - credit lines at the end of a tweet, such as `#newsroom with @anchor`, are
+     removed from the text. Only whole lines at the very end are removed, and
+     only when they hold nothing but hashtags (at least one), mentions and the
+     connecting words `עם`, `ו`, `with`, `and`, `via` or separators like `|`.
+     A line with any other word is kept, and so is a tweet made only of tags.
+     Mentions in a removed line still count for `TWITTER_MENTIONED_USERNAMES`
 2. Each of those tweets is forwarded to `TELEGRAM_CHAT_ID`. Retweets are sent
    with the full text and media of the original tweet:
    - no media → a text message

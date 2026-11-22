@@ -21,6 +21,7 @@ from pusher.sources.base import (
     best_mp4_url,
     expand_urls,
     is_allowed,
+    strip_credit_lines,
 )
 
 if TYPE_CHECKING:
@@ -317,7 +318,7 @@ def parse_tweet_result(result: dict[str, Any], author_username: str) -> Tweet | 
     return Tweet(
         id=tweet_id,
         author_username=author_username,
-        text=html.unescape(text).strip(),
+        text=strip_credit_lines(html.unescape(text)),
         mentions=frozenset(mentions),
         media=media,
         created_at=outer_legacy.get("created_at"),
