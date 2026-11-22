@@ -81,6 +81,8 @@ def test_skips_other_authors_and_filters_retweets_and_replies():
     assert [t.id for t in with_retweets] == ["300", "302", "303"]
     assert with_retweets[-1].text == "hi @me"
     assert with_retweets[-1].mentions_user("me")
+    assert with_retweets[-1].retweeted_username == "x"
+    assert not with_retweets[0].is_retweet
 
 
 def test_prefers_note_tweet_and_unwraps_visibility_results():

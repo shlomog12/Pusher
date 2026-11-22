@@ -1,4 +1,4 @@
-"""Entry point: poll the watched account and forward tweets that mention you."""
+"""Entry point: poll the configured accounts and forward their tweets to Telegram."""
 
 from __future__ import annotations
 
@@ -18,57 +18,72 @@ from pusher.telegram_client import TelegramApiError, TelegramClient
 logger = logging.getLogger("pusher")
 
 
-class MentionForwarder:
+class TweetForwarder:
     def __init__(
         self,
         config: Config,
-        source: TweetSource,
+        sources: list[TweetSource],
         telegram: TelegramClient,
         state: StateStore,
     ) -> None:
         self._config = config
-        self._source = source
+        self._sources = sources
         self._telegram = telegram
         self._state = state
 
     def run_once(self) -> int:
-        """Check for new tweets once. Returns the number of notifications sent."""
-        watched = self._config.watched_username
-        since_id = self._state.load_last_tweet_id(watched)
+        """Check every source once. Returns the number of notifications sent.
+
+        A failing source is logged and skipped so it doesn't block the others.
+        """
+        sent = 0
+        for source in self._sources:
+            try:
+                sent += self._check(source)
+            except (TweetSourceError, TelegramApiError, requests.RequestException):
+                logger.exception("Checking @%s failed, will retry", source.username)
+        return sent
+
+    def run_forever(self, stop_event: threading.Event) -> None:
+        for source in self._sources:
+            logger.info("Watching @%s: %s", source.username, _describe(source))
+        logger.info(
+            "Checking every %s seconds using the %r source",
+            self._config.poll_interval_seconds,
+            self._config.tweet_source,
+        )
+        while not stop_event.is_set():
+            self.run_once()
+            stop_event.wait(self._config.poll_interval_seconds)
+
+    def _check(self, source: TweetSource) -> int:
+        since_id = self._state.load_last_tweet_id(source.username)
         if since_id is None:
-            start_id = self._source.initial_since_id()
+            start_id = source.initial_since_id()
             if start_id:
-                self._state.save_last_tweet_id(watched, start_id)
+                self._state.save_last_tweet_id(source.username, start_id)
             logger.info(
                 "First run for @%s: starting from tweet id %s, older tweets are skipped",
-                watched,
+                source.username,
                 start_id,
             )
             return 0
 
         sent = 0
-        for tweet in self._source.new_tweets(since_id):
-            if tweet.mentions_user(self._config.my_username):
+        for tweet in source.new_tweets(since_id):
+            if source.wants(tweet):
                 logger.info("Forwarding tweet %s", tweet.url)
                 self._telegram.send_tweet(tweet)
                 sent += 1
-            self._state.save_last_tweet_id(watched, tweet.id)
+            self._state.save_last_tweet_id(source.username, tweet.id)
         return sent
 
-    def run_forever(self, stop_event: threading.Event) -> None:
-        logger.info(
-            "Watching @%s for mentions of @%s every %s seconds using the %r source",
-            self._config.watched_username,
-            self._config.my_username,
-            self._config.poll_interval_seconds,
-            self._config.tweet_source,
-        )
-        while not stop_event.is_set():
-            try:
-                self.run_once()
-            except (TweetSourceError, TelegramApiError, requests.RequestException):
-                logger.exception("Polling cycle failed, will retry")
-            stop_event.wait(self._config.poll_interval_seconds)
+
+def _describe(source: TweetSource) -> str:
+    if source.mentioned_usernames:
+        names = ", ".join(f"@{name}" for name in source.mentioned_usernames)
+        return f"tweets that tag {names}"
+    return "all tweets" + (" and retweets" if source.include_retweets else "")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -81,7 +96,7 @@ def main(argv: list[str] | None = None) -> None:
 
     try:
         config = Config.from_env(args.env_file)
-        source = TweetSourceFactory.create(config)
+        sources = TweetSourceFactory.create_all(config)
     except ConfigError as exc:
         sys.exit(f"Configuration error: {exc}")
 
@@ -90,9 +105,9 @@ def main(argv: list[str] | None = None) -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    forwarder = MentionForwarder(
+    forwarder = TweetForwarder(
         config=config,
-        source=source,
+        sources=sources,
         telegram=TelegramClient(config.telegram_bot_token, config.telegram_chat_id),
         state=StateStore(config.state_file),
     )

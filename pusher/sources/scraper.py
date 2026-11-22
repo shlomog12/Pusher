@@ -12,13 +12,13 @@ from __future__ import annotations
 import html
 import logging
 import re
-from typing import TYPE_CHECKING, Any, Iterator, Protocol
+from typing import TYPE_CHECKING, Any, Iterable, Iterator, Protocol
 
 from pusher.models import Media, MediaType, Tweet
 from pusher.sources.base import TweetSource, TweetSourceError, best_mp4_url, expand_urls
 
 if TYPE_CHECKING:
-    from pusher.config import Config
+    from pusher.config import Config, Feed
 
 logger = logging.getLogger(__name__)
 
@@ -142,14 +142,15 @@ class ScraperTweetSource(TweetSource):
         self,
         username: str,
         fetcher: TimelineFetcher,
+        mentioned_usernames: Iterable[str] = (),
         include_retweets: bool = False,
         include_replies: bool = True,
     ) -> None:
-        super().__init__(username, include_retweets, include_replies)
+        super().__init__(username, mentioned_usernames, include_retweets, include_replies)
         self._fetcher = fetcher
 
     @classmethod
-    def from_config(cls, config: "Config") -> "ScraperTweetSource":
+    def from_config(cls, config: "Config", feed: "Feed") -> "ScraperTweetSource":
         fetcher = PlaywrightTimelineFetcher(
             auth_token=config.require("scraper_auth_token", "X_AUTH_TOKEN"),
             ct0=config.scraper_ct0,
@@ -159,10 +160,11 @@ class ScraperTweetSource(TweetSource):
             executable_path=config.scraper_browser_path,
         )
         return cls(
-            username=config.watched_username,
+            username=feed.username,
             fetcher=fetcher,
-            include_retweets=config.include_retweets,
-            include_replies=config.include_replies,
+            mentioned_usernames=feed.mentioned_usernames,
+            include_retweets=feed.include_retweets,
+            include_replies=feed.include_replies,
         )
 
     def initial_since_id(self) -> str | None:
@@ -188,7 +190,7 @@ def parse_timeline(
     include_retweets: bool = False,
     include_replies: bool = True,
 ) -> list[Tweet]:
-    """Extract the watched account's own tweets from GraphQL timeline payloads."""
+    """Extract the account's own tweets from GraphQL timeline payloads."""
     tweets: dict[str, Tweet] = {}
     for payload in payloads:
         for result in _iter_tweet_results(payload):
@@ -213,9 +215,11 @@ def parse_tweet_result(result: dict[str, Any], author_username: str) -> Tweet | 
 
     outer_legacy = result.get("legacy") or {}
     content = result
+    retweeted_username = None
     retweeted = _unwrap(outer_legacy.get("retweeted_status_result", {}).get("result"))
     if retweeted:
         content = retweeted
+        retweeted_username = _screen_name(retweeted)
 
     legacy = content.get("legacy") or {}
     note = (
@@ -249,6 +253,7 @@ def parse_tweet_result(result: dict[str, Any], author_username: str) -> Tweet | 
         mentions=frozenset(mentions),
         media=media,
         created_at=outer_legacy.get("created_at"),
+        retweeted_username=retweeted_username,
     )
 
 

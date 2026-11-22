@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import html
 import logging
+import re
 import time
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Iterable
 
 import requests
 
@@ -14,7 +15,7 @@ from pusher.models import Media, MediaType, Tweet
 from pusher.sources.base import TweetSource, TweetSourceError, best_mp4_url, expand_urls
 
 if TYPE_CHECKING:
-    from pusher.config import Config
+    from pusher.config import Config, Feed
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,16 @@ API_BASE_URL = "https://api.x.com/2"
 SEARCH_PATH = "/tweets/search/recent"
 TWEET_FIELDS = "created_at,entities,attachments,note_tweet,referenced_tweets"
 MEDIA_FIELDS = "type,url,preview_image_url,variants"
+# The retweeted tweet, its media and its author, so retweets are sent in full
+# rather than as X's truncated "RT @user: ..." text.
+EXPANSIONS = ",".join([
+    "attachments.media_keys",
+    "referenced_tweets.id",
+    "referenced_tweets.id.attachments.media_keys",
+    "referenced_tweets.id.author_id",
+])
+USER_FIELDS = "username"
+RETWEET_PREFIX = re.compile(r"^RT @(\w+):")
 MAX_RESULTS_PER_PAGE = 100
 MAX_RATE_LIMIT_WAIT_SECONDS = 15 * 60
 
@@ -42,35 +53,34 @@ class TwitterApiError(TweetSourceError):
 class ApiTweetSource(TweetSource):
     """Loads tweets through the X API v2 recent search endpoint.
 
-    The search query only matches tweets of the watched account that mention
-    ``mention_username``, so with X's pay-per-use pricing only those tweets are
+    When ``mentioned_usernames`` is set, the search query only matches tweets
+    that tag one of them, so with X's pay-per-use pricing only those tweets are
     billed rather than every tweet the account publishes.
     """
 
     def __init__(
         self,
         username: str,
-        mention_username: str,
         bearer_token: str,
+        mentioned_usernames: Iterable[str] = (),
         include_retweets: bool = False,
         include_replies: bool = True,
         session: requests.Session | None = None,
         timeout: float = 30.0,
     ) -> None:
-        super().__init__(username, include_retweets, include_replies)
-        self.mention_username = mention_username
+        super().__init__(username, mentioned_usernames, include_retweets, include_replies)
         self._session = session or requests.Session()
         self._session.headers.update({"Authorization": f"Bearer {bearer_token}"})
         self._timeout = timeout
 
     @classmethod
-    def from_config(cls, config: "Config") -> "ApiTweetSource":
+    def from_config(cls, config: "Config", feed: "Feed") -> "ApiTweetSource":
         return cls(
-            username=config.watched_username,
-            mention_username=config.my_username,
+            username=feed.username,
             bearer_token=config.require("twitter_bearer_token", "TWITTER_BEARER_TOKEN"),
-            include_retweets=config.include_retweets,
-            include_replies=config.include_replies,
+            mentioned_usernames=feed.mentioned_usernames,
+            include_retweets=feed.include_retweets,
+            include_replies=feed.include_replies,
         )
 
     def initial_since_id(self) -> str:
@@ -84,8 +94,9 @@ class ApiTweetSource(TweetSource):
             "since_id": since_id,
             "max_results": MAX_RESULTS_PER_PAGE,
             "tweet.fields": TWEET_FIELDS,
-            "expansions": "attachments.media_keys",
+            "expansions": EXPANSIONS,
             "media.fields": MEDIA_FIELDS,
+            "user.fields": USER_FIELDS,
         }
         try:
             tweets = self._search(params)
@@ -103,7 +114,12 @@ class ApiTweetSource(TweetSource):
         return tweets
 
     def search_query(self) -> str:
-        terms = [f"from:{self.username}", f"@{self.mention_username}"]
+        terms = [f"from:{self.username}"]
+        mentions = " OR ".join(f"@{name}" for name in self.mentioned_usernames)
+        if len(self.mentioned_usernames) > 1:
+            mentions = f"({mentions})"
+        if mentions:
+            terms.append(mentions)
         if not self.include_retweets:
             terms.append("-is:retweet")
         if not self.include_replies:
@@ -115,12 +131,12 @@ class ApiTweetSource(TweetSource):
         tweets: list[Tweet] = []
         while True:
             payload = self._get(SEARCH_PATH, params=params)
-            media_by_key = {
-                item["media_key"]: item
-                for item in payload.get("includes", {}).get("media", [])
-            }
+            includes = payload.get("includes", {})
+            media_by_key = {item["media_key"]: item for item in includes.get("media", [])}
+            tweets_by_id = {item["id"]: item for item in includes.get("tweets", [])}
+            users_by_id = {item["id"]: item for item in includes.get("users", [])}
             tweets.extend(
-                parse_tweet(raw, self.username, media_by_key)
+                parse_tweet(raw, self.username, media_by_key, tweets_by_id, users_by_id)
                 for raw in payload.get("data", [])
             )
             next_token = payload.get("meta", {}).get("next_token")
@@ -176,18 +192,36 @@ def parse_tweet(
     raw: dict[str, Any],
     author_username: str,
     media_by_key: dict[str, dict[str, Any]],
+    tweets_by_id: dict[str, dict[str, Any]] | None = None,
+    users_by_id: dict[str, dict[str, Any]] | None = None,
 ) -> Tweet:
-    note = raw.get("note_tweet") or {}
-    text = note.get("text") or raw.get("text", "")
-    entities = note.get("entities") or raw.get("entities") or {}
+    content = raw
+    retweeted_username = None
+    retweeted_id = _retweeted_id(raw)
+    if retweeted_id:
+        prefix = RETWEET_PREFIX.match(raw.get("text", ""))
+        retweeted_username = prefix.group(1) if prefix else ""
+        original = (tweets_by_id or {}).get(retweeted_id)
+        if original:
+            content = original
+            author = (users_by_id or {}).get(original.get("author_id", ""), {})
+            retweeted_username = author.get("username") or retweeted_username
+
+    note = content.get("note_tweet") or {}
+    text = note.get("text") or content.get("text", "")
+    entities = note.get("entities") or content.get("entities") or {}
 
     mentions = {
         mention["username"].lower()
-        for source in (raw.get("entities") or {}, note.get("entities") or {})
+        for source in (
+            raw.get("entities") or {},
+            content.get("entities") or {},
+            note.get("entities") or {},
+        )
         for mention in source.get("mentions", [])
     }
 
-    media_keys = (raw.get("attachments") or {}).get("media_keys", [])
+    media_keys = (content.get("attachments") or {}).get("media_keys", [])
     media = tuple(
         parsed
         for key in media_keys
@@ -203,7 +237,15 @@ def parse_tweet(
         mentions=frozenset(mentions),
         media=media,
         created_at=raw.get("created_at"),
+        retweeted_username=retweeted_username,
     )
+
+
+def _retweeted_id(raw: dict[str, Any]) -> str | None:
+    for reference in raw.get("referenced_tweets") or []:
+        if reference.get("type") == "retweeted":
+            return reference.get("id")
+    return None
 
 
 def parse_media(raw: dict[str, Any]) -> Media | None:

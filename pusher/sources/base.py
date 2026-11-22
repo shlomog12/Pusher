@@ -1,9 +1,9 @@
-"""Abstract interface for anything that can load tweets of the watched account."""
+"""Abstract interface for anything that can load tweets of a single account."""
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Iterable
 
 from pusher.models import Tweet
 
@@ -13,17 +13,30 @@ class TweetSourceError(RuntimeError):
 
 
 class TweetSource(ABC):
-    """Loads tweets authored by a single watched account."""
+    """Loads tweets authored by a single account.
+
+    When ``mentioned_usernames`` is set, only tweets that tag one of those
+    accounts are wanted; otherwise every tweet of the account is.
+    """
 
     def __init__(
         self,
         username: str,
+        mentioned_usernames: Iterable[str] = (),
         include_retweets: bool = False,
         include_replies: bool = True,
     ) -> None:
         self.username = username
+        self.mentioned_usernames = tuple(
+            sorted({name.lstrip("@").lower() for name in mentioned_usernames})
+        )
         self.include_retweets = include_retweets
         self.include_replies = include_replies
+
+    def wants(self, tweet: Tweet) -> bool:
+        return not self.mentioned_usernames or any(
+            tweet.mentions_user(name) for name in self.mentioned_usernames
+        )
 
     @abstractmethod
     def initial_since_id(self) -> str | None:

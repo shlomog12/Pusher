@@ -10,9 +10,9 @@ from pusher.sources.base import TweetSource
 from pusher.sources.scraper import ScraperTweetSource
 
 if TYPE_CHECKING:
-    from pusher.config import Config
+    from pusher.config import Config, Feed
 
-SourceBuilder = Callable[["Config"], TweetSource]
+SourceBuilder = Callable[["Config", "Feed"], TweetSource]
 
 
 class TweetSourceFactory:
@@ -32,7 +32,11 @@ class TweetSourceFactory:
         return sorted(cls._builders)
 
     @classmethod
-    def create(cls, config: "Config") -> TweetSource:
+    def create_all(cls, config: "Config") -> list[TweetSource]:
+        return [cls.create(config, feed) for feed in config.feeds()]
+
+    @classmethod
+    def create(cls, config: "Config", feed: "Feed") -> TweetSource:
         name = config.tweet_source.lower()
         try:
             builder = cls._builders[name]
@@ -41,4 +45,4 @@ class TweetSourceFactory:
                 f"Unknown TWEET_SOURCE {config.tweet_source!r}; "
                 f"expected one of: {', '.join(cls.available())}"
             ) from exc
-        return builder(config)
+        return builder(config, feed)

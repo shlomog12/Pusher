@@ -58,16 +58,40 @@ def _optional(name: str) -> str | None:
     return value or None
 
 
+def _optional_handle(name: str) -> str | None:
+    value = _optional(name)
+    return value.lstrip("@") if value else None
+
+
+def _handle_list(name: str) -> tuple[str, ...]:
+    raw = os.getenv(name, "")
+    return tuple(item.strip().lstrip("@") for item in raw.split(",") if item.strip())
+
+
+@dataclass(frozen=True)
+class Feed:
+    """One account whose tweets are loaded, and which of them are forwarded."""
+
+    username: str
+    # Only tweets that tag one of these accounts are forwarded; empty means all.
+    mentioned_usernames: tuple[str, ...] = ()
+    include_retweets: bool = False
+    include_replies: bool = False
+
+
 @dataclass(frozen=True)
 class Config:
     watched_username: str
-    my_username: str
     telegram_bot_token: str
     telegram_chat_id: str
+    mentioned_usernames: tuple[str, ...] = ()
+    my_username: str | None = None
+    forward_my_tweets: bool = False
+    forward_my_retweets: bool = False
     tweet_source: str = "api"
     poll_interval_seconds: int = 300
     include_retweets: bool = False
-    include_replies: bool = True
+    include_replies: bool = False
     state_file: Path = Path("state.json")
     log_level: str = "INFO"
     twitter_bearer_token: str | None = None
@@ -77,6 +101,41 @@ class Config:
     scraper_scroll_count: int = 2
     scraper_timeout_seconds: int = 45
     scraper_browser_path: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.mentioned_usernames:
+            raise ConfigError(
+                "Set TWITTER_MENTIONED_USERNAMES (or TWITTER_MY_USERNAME) "
+                "to the accounts whose tags should be forwarded"
+            )
+        if self.forward_my_tweets:
+            if not self.my_username:
+                raise ConfigError("TWITTER_MY_USERNAME is required when FORWARD_MY_TWEETS=true")
+            if self.my_username.lower() == self.watched_username.lower():
+                raise ConfigError(
+                    "FORWARD_MY_TWEETS=true needs TWITTER_MY_USERNAME to differ "
+                    "from TWITTER_WATCHED_USERNAME"
+                )
+
+    def feeds(self) -> list[Feed]:
+        """The accounts to check on every cycle."""
+        feeds = [
+            Feed(
+                username=self.watched_username,
+                mentioned_usernames=self.mentioned_usernames,
+                include_retweets=self.include_retweets,
+                include_replies=self.include_replies,
+            )
+        ]
+        if self.forward_my_tweets and self.my_username:
+            feeds.append(
+                Feed(
+                    username=self.my_username,
+                    include_retweets=self.forward_my_retweets,
+                    include_replies=self.include_replies,
+                )
+            )
+        return feeds
 
     def require(self, field_name: str, env_name: str) -> str:
         """Return a source-specific setting, failing if it was not configured."""
@@ -90,15 +149,22 @@ class Config:
     @classmethod
     def from_env(cls, env_file: str | None = None) -> "Config":
         load_dotenv(env_file)
+        my_username = _optional_handle("TWITTER_MY_USERNAME")
+        mentioned = _handle_list("TWITTER_MENTIONED_USERNAMES")
+        if not mentioned and my_username:
+            mentioned = (my_username,)
         return cls(
             watched_username=_handle("TWITTER_WATCHED_USERNAME"),
-            my_username=_handle("TWITTER_MY_USERNAME"),
+            mentioned_usernames=mentioned,
+            my_username=my_username,
+            forward_my_tweets=_bool("FORWARD_MY_TWEETS", False),
+            forward_my_retweets=_bool("FORWARD_MY_RETWEETS", False),
             telegram_bot_token=_required("TELEGRAM_BOT_TOKEN"),
             telegram_chat_id=_required("TELEGRAM_CHAT_ID"),
             tweet_source=os.getenv("TWEET_SOURCE", "api").strip().lower() or "api",
             poll_interval_seconds=_positive_int("POLL_INTERVAL_SECONDS", 300),
             include_retweets=_bool("INCLUDE_RETWEETS", False),
-            include_replies=_bool("INCLUDE_REPLIES", True),
+            include_replies=_bool("INCLUDE_REPLIES", False),
             state_file=Path(os.getenv("STATE_FILE", "state.json")),
             log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
             twitter_bearer_token=_optional("TWITTER_BEARER_TOKEN"),

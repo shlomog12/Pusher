@@ -116,4 +116,16 @@ def test_format_tweet_escapes_html_and_respects_limit():
 
     assert len(formatted) <= 500
     assert "<b>&</b>" not in formatted
-    assert formatted.endswith("View on X</a>")
+    assert formatted.endswith("…")
+
+
+
+def test_message_is_only_the_tweet_text():
+    assert format_tweet(_tweet()) == "hello @me"
+
+
+def test_media_only_tweet_is_sent_without_caption(session):
+    TelegramClient("token", "42", session=session).send_tweet(_tweet(text="", media=(PHOTO,)))
+
+    assert [p["method"] for p in session.posts] == ["sendPhoto"]
+    assert "caption" not in session.posts[0]["data"]

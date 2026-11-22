@@ -65,6 +65,40 @@ def test_parse_tweet_prefers_long_form_note_text():
     assert tweet.mentions_user("ME")
 
 
+def test_parse_retweet_uses_the_original_tweet_and_author():
+    raw = {
+        "id": "200",
+        "text": "RT @orig: truncated…",
+        "referenced_tweets": [{"type": "retweeted", "id": "150"}],
+    }
+    original = _raw_tweet(id="150", author_id="9")
+    tweet = parse_tweet(raw, "me", MEDIA, {"150": original}, {"9": {"id": "9", "username": "Orig"}})
+
+    assert tweet.id == "200"
+    assert tweet.url == "https://x.com/me/status/200"
+    assert tweet.retweeted_username == "Orig"
+    assert tweet.text == "Thanks @Me & friends https://example.com"
+    assert [m.type for m in tweet.media] == [MediaType.PHOTO, MediaType.VIDEO]
+
+
+def test_parse_retweet_without_includes_keeps_text_and_author_from_prefix():
+    raw = {
+        "id": "200",
+        "text": "RT @orig: truncated…",
+        "referenced_tweets": [{"type": "retweeted", "id": "150"}],
+    }
+    tweet = parse_tweet(raw, "me", {})
+
+    assert tweet.is_retweet
+    assert tweet.retweeted_username == "orig"
+    assert tweet.text == "RT @orig: truncated…"
+
+
+def test_quote_and_reply_are_not_retweets():
+    raw = _raw_tweet(referenced_tweets=[{"type": "quoted", "id": "1"}])
+    assert not parse_tweet(raw, "page", MEDIA).is_retweet
+
+
 def test_animated_gif_maps_to_animation():
     media = {"16_1": {"type": "animated_gif", "variants": [
         {"content_type": "video/mp4", "bit_rate": 0, "url": "https://video/gif.mp4"}
@@ -111,7 +145,8 @@ class FakeSession:
 
 
 def _source(session, **kwargs):
-    return ApiTweetSource("Page", "me", "token", session=session, **kwargs)
+    kwargs.setdefault("mentioned_usernames", ["me"])
+    return ApiTweetSource("Page", "token", session=session, **kwargs)
 
 
 def _page(ids, next_token=None):
@@ -125,6 +160,14 @@ def test_search_query_filters_by_author_and_mention():
         _source(None, include_retweets=True, include_replies=False).search_query()
         == "from:Page @me -is:reply"
     )
+
+
+def test_search_query_with_several_or_no_mentions():
+    several = _source(None, mentioned_usernames=["me", "@Friend"])
+    assert several.search_query() == "from:Page (@friend OR @me) -is:retweet"
+
+    everything = _source(None, mentioned_usernames=[], include_retweets=True)
+    assert everything.search_query() == "from:Page"
 
 
 def test_new_tweets_searches_since_id_and_follows_pagination():

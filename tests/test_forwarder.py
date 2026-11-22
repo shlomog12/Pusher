@@ -1,20 +1,23 @@
 from pusher.config import Config
-from pusher.main import MentionForwarder
+from pusher.main import TweetForwarder
 from pusher.models import Tweet
-from pusher.sources.base import TweetSource
+from pusher.sources.base import TweetSource, TweetSourceError
 from pusher.state import StateStore
 
 
 class FakeSource(TweetSource):
-    def __init__(self, tweets, latest="50"):
-        super().__init__("Page")
+    def __init__(self, username, tweets, latest="50", mentioned_usernames=(), error=None):
+        super().__init__(username, mentioned_usernames)
         self.tweets = tweets
         self.latest = latest
+        self.error = error
 
     def initial_since_id(self):
         return self.latest
 
     def new_tweets(self, since_id):
+        if self.error:
+            raise self.error
         return [t for t in self.tweets if int(t.id) > int(since_id)]
 
 
@@ -29,39 +32,69 @@ class FakeTelegram:
 def _config(tmp_path):
     return Config(
         watched_username="Page",
-        my_username="me",
+        mentioned_usernames=("me",),
         telegram_bot_token="b",
         telegram_chat_id="1",
         state_file=tmp_path / "state.json",
     )
 
 
-def _tweet(tweet_id, mentions):
-    return Tweet(id=tweet_id, author_username="Page", text="hi", mentions=frozenset(mentions))
+def _tweet(tweet_id, mentions, author="Page"):
+    return Tweet(id=tweet_id, author_username=author, text="hi", mentions=frozenset(mentions))
 
 
-def test_first_run_records_latest_without_notifying(tmp_path):
+def _forwarder(tmp_path, *sources):
     config = _config(tmp_path)
     state = StateStore(config.state_file)
     telegram = FakeTelegram()
-    forwarder = MentionForwarder(config, FakeSource([_tweet("40", {"me"})]), telegram, state)
+    return TweetForwarder(config, list(sources), telegram, state), telegram, state
+
+
+def test_first_run_records_latest_without_notifying(tmp_path):
+    source = FakeSource("Page", [_tweet("40", {"me"})], mentioned_usernames=["me"])
+    forwarder, telegram, state = _forwarder(tmp_path, source)
 
     assert forwarder.run_once() == 0
     assert telegram.sent == []
     assert state.load_last_tweet_id("page") == "50"
 
 
-def test_forwards_only_tweets_that_mention_me(tmp_path):
-    config = _config(tmp_path)
-    state = StateStore(config.state_file)
+def test_forwards_only_tweets_that_tag_a_mentioned_user(tmp_path):
+    tweets = [
+        _tweet("51", {"me"}),
+        _tweet("52", {"other"}),
+        _tweet("53", {"me", "friend"}),
+        _tweet("54", {"friend"}),
+    ]
+    source = FakeSource("Page", tweets, mentioned_usernames=["Me", "@friend"])
+    forwarder, telegram, state = _forwarder(tmp_path, source)
     state.save_last_tweet_id("Page", "50")
-    tweets = [_tweet("51", {"me"}), _tweet("52", {"other"}), _tweet("53", {"me", "other"})]
-    telegram = FakeTelegram()
-    forwarder = MentionForwarder(config, FakeSource(tweets), telegram, state)
 
-    assert forwarder.run_once() == 2
-    assert telegram.sent == ["51", "53"]
-    assert state.load_last_tweet_id("page") == "53"
+    assert forwarder.run_once() == 3
+    assert telegram.sent == ["51", "53", "54"]
+    assert state.load_last_tweet_id("page") == "54"
 
     assert forwarder.run_once() == 0
-    assert telegram.sent == ["51", "53"]
+    assert len(telegram.sent) == 3
+
+
+def test_source_without_mentions_forwards_every_tweet(tmp_path):
+    mine = FakeSource("me", [_tweet("61", set(), "me"), _tweet("62", {"x"}, "me")])
+    forwarder, telegram, state = _forwarder(tmp_path, mine)
+    state.save_last_tweet_id("me", "60")
+
+    assert forwarder.run_once() == 2
+    assert telegram.sent == ["61", "62"]
+
+
+def test_each_source_keeps_its_own_state_and_failures_are_isolated(tmp_path):
+    broken = FakeSource("Page", [], error=TweetSourceError("down"), mentioned_usernames=["me"])
+    mine = FakeSource("me", [_tweet("71", set(), "me")])
+    forwarder, telegram, state = _forwarder(tmp_path, broken, mine)
+    state.save_last_tweet_id("Page", "50")
+    state.save_last_tweet_id("me", "70")
+
+    assert forwarder.run_once() == 1
+    assert telegram.sent == ["71"]
+    assert state.load_last_tweet_id("page") == "50"
+    assert state.load_last_tweet_id("me") == "71"

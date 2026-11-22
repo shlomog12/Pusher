@@ -1,15 +1,23 @@
 # Pusher
 
 Watches one X (Twitter) account and sends you a Telegram message every time that
-account posts a tweet that tags you. The message has the tweet's text, a link to
-the tweet, and its photos, videos and GIFs.
+account posts a tweet that tags you, or any other account in a list you choose.
+It can also forward every tweet you post yourself, optionally with your retweets.
+The message is just the tweet's text with its photos, videos and GIFs, as if
+someone had sent it to you directly.
 
 ## How it works
 
-1. Every `POLL_INTERVAL_SECONDS`, it loads the watched account's new tweets
-   through the configured tweet source (see [Tweet sources](#tweet-sources)).
-2. Each tweet whose mentions include `TWITTER_MY_USERNAME` is forwarded to
-   `TELEGRAM_CHAT_ID`:
+1. Every `POLL_INTERVAL_SECONDS`, it loads new tweets through the configured
+   tweet source (see [Tweet sources](#tweet-sources)) for each account it checks:
+   - the watched account (`TWITTER_WATCHED_USERNAME`), keeping only tweets that
+     tag one of `TWITTER_MENTIONED_USERNAMES`
+   - replies are skipped for both unless `INCLUDE_REPLIES=true`
+   - with `FORWARD_MY_TWEETS=true`, your own account (`TWITTER_MY_USERNAME`),
+     keeping all your tweets, plus your retweets when
+     `FORWARD_MY_RETWEETS=true`
+2. Each of those tweets is forwarded to `TELEGRAM_CHAT_ID`. Retweets are sent
+   with the full text and media of the original tweet:
    - no media → a text message
    - one photo / video / GIF → `sendPhoto` / `sendVideo` / `sendAnimation` with the text as caption
    - several media → an album (`sendMediaGroup`)
@@ -17,9 +25,9 @@ the tweet, and its photos, videos and GIFs.
 3. Media is first sent by URL. If Telegram can't fetch it (Telegram fetches files
    up to 20 MB by URL), the bot downloads the file and uploads it (up to 50 MB).
    If that fails too, it sends the media as links.
-4. The id of the last processed tweet is saved to `STATE_FILE`, so restarting
-   doesn't send duplicates. On the very first run the bot only records a
-   starting point and doesn't forward older tweets.
+4. The id of the last processed tweet of each account is saved to `STATE_FILE`,
+   so restarting doesn't send duplicates. On the first run for an account the
+   bot only records a starting point and doesn't forward older tweets.
 
 ## Tweet sources
 
@@ -43,6 +51,8 @@ only takes a change in `.env`.
 - Each check reads the most recent tweets on the profile, plus
   `SCRAPER_SCROLLS` scrolls. If the account posts more tweets between two checks
   than that covers, increase `SCRAPER_SCROLLS` or shorten the poll interval.
+- With `FORWARD_MY_TWEETS`, each check loads your profile too, in a second
+  browser session.
 - Install the extra dependencies: `pip install -r requirements-scraper.txt`
   and `playwright install chromium`.
 
@@ -63,12 +73,17 @@ TweetSourceFactory.register("rss", RssTweetSource.from_config)
    copy the token. Send your bot any message, then get your chat id from
    `https://api.telegram.org/bot<TOKEN>/getUpdates` (`message.chat.id`).
 3. Copy `.env.example` to `.env` and fill in the values.
+4. Check the Telegram settings by sending a test message:
+   `python -m scripts.check_telegram`
 
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
 | `TWEET_SOURCE` | no | `api` | `api` or `scraper` |
 | `TWITTER_WATCHED_USERNAME` | yes | | Account to watch (with or without `@`) |
-| `TWITTER_MY_USERNAME` | yes | | Your handle; tweets that tag it are forwarded |
+| `TWITTER_MENTIONED_USERNAMES` | yes* | `TWITTER_MY_USERNAME` | Comma-separated accounts; watched tweets that tag any of them are forwarded |
+| `TWITTER_MY_USERNAME` | with `FORWARD_MY_TWEETS` | | Your handle |
+| `FORWARD_MY_TWEETS` | no | `false` | Also forward every tweet you post |
+| `FORWARD_MY_RETWEETS` | no | `false` | With `FORWARD_MY_TWEETS`, also forward your retweets |
 | `TELEGRAM_BOT_TOKEN` | yes | | Bot token from BotFather |
 | `TELEGRAM_CHAT_ID` | yes | | Chat that receives notifications |
 | `TWITTER_BEARER_TOKEN` | with `api` | | X API v2 bearer token |
@@ -79,16 +94,20 @@ TweetSourceFactory.register("rss", RssTweetSource.from_config)
 | `SCRAPER_TIMEOUT_SECONDS` | no | `45` | Page load timeout |
 | `SCRAPER_BROWSER_PATH` | no | | Chrome/Chromium binary to use instead of Playwright's |
 | `POLL_INTERVAL_SECONDS` | no | `300` | Seconds between checks |
-| `INCLUDE_RETWEETS` | no | `false` | Also check the account's retweets |
-| `INCLUDE_REPLIES` | no | `true` | Also check the account's replies |
+| `INCLUDE_RETWEETS` | no | `false` | Also check the watched account's retweets |
+| `INCLUDE_REPLIES` | no | `false` | Also forward replies, from the watched account and from you |
 | `STATE_FILE` | no | `state.json` | Where the last processed tweet id is stored |
 | `LOG_LEVEL` | no | `INFO` | Logging level |
+
+\* Required unless `TWITTER_MY_USERNAME` is set, which is then used as the only entry.
 
 ### API source notes
 
 - X bills the API per post returned. The search query only matches tweets of the
-  watched account that tag you, so you pay only for tweets that are forwarded,
-  not for everything the account posts. Empty checks return no posts.
+  watched account that tag one of `TWITTER_MENTIONED_USERNAMES`, so you pay only
+  for tweets that are forwarded, not for everything the account posts. Empty
+  checks return no posts. With `FORWARD_MY_TWEETS`, each of your own tweets is
+  billed as well, and a retweet may also bill the original tweet it includes.
 - The first run needs no API reads: the starting point is a tweet id computed
   from the current time.
 - Recent search covers the last 7 days. If the bot was down for longer than

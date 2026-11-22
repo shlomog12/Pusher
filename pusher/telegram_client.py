@@ -46,10 +46,11 @@ class TelegramClient:
     def send_tweet(self, tweet: Tweet) -> None:
         text = format_tweet(tweet)
         if not tweet.media:
-            self.send_message(text)
+            # Telegram rejects empty messages; a tweet without text or media is rare.
+            self.send_message(text or html.escape(tweet.url))
             return
 
-        caption: str | None = text
+        caption: str | None = text or None
         if len(text) > MAX_CAPTION_LENGTH:
             self.send_message(text)
             caption = None
@@ -175,11 +176,8 @@ class TelegramClient:
 
 
 def format_tweet(tweet: Tweet, max_length: int = MAX_MESSAGE_LENGTH) -> str:
-    header = f"<b>@{html.escape(tweet.author_username)}</b> tagged you on X"
-    footer = f'<a href="{html.escape(tweet.url)}">View on X</a>'
-    budget = max_length - len(header) - len(footer) - 4
-    body = _escape_within(tweet.text, budget)
-    return f"{header}\n\n{body}\n\n{footer}" if body else f"{header}\n\n{footer}"
+    """The tweet's text as a plain message, HTML-escaped and cut to ``max_length``."""
+    return _escape_within(tweet.text, max_length)
 
 
 def format_media_fallback(tweet: Tweet, include_text: bool) -> str:
@@ -187,8 +185,8 @@ def format_media_fallback(tweet: Tweet, include_text: bool) -> str:
         f'<a href="{html.escape(item.url)}">{item.type.value} {index}</a>'
         for index, item in enumerate(tweet.media, start=1)
     )
-    prefix = format_tweet(tweet) + "\n\n" if include_text else ""
-    return f"{prefix}Media:\n{links}"
+    text = format_tweet(tweet) if include_text else ""
+    return f"{text}\n\n{links}" if text else links
 
 
 def _escape_within(text: str, limit: int) -> str:
@@ -196,10 +194,13 @@ def _escape_within(text: str, limit: int) -> str:
     escaped = html.escape(text)
     if len(escaped) <= limit:
         return escaped
-    cut = limit - 1
-    while cut > 0:
-        escaped = html.escape(text[:cut].rstrip()) + "…"
-        if len(escaped) <= limit:
-            return escaped
-        cut -= len(escaped) - limit
-    return ""
+    # Escaping can lengthen the text a lot (e.g. "&" -> "&amp;"), so search for
+    # the longest prefix that still fits together with the ellipsis.
+    low, high = 0, len(text)
+    while low < high:
+        mid = (low + high + 1) // 2
+        if len(html.escape(text[:mid].rstrip())) + 1 <= limit:
+            low = mid
+        else:
+            high = mid - 1
+    return html.escape(text[:low].rstrip()) + "…" if low else ""
