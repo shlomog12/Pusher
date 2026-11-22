@@ -154,6 +154,46 @@ docker build -t pusher --build-arg WITH_SCRAPER=true .    # also supports the sc
 docker run -d --name pusher --env-file .env -v pusher-data:/data pusher
 ```
 
+## Deploying to a server
+
+`.github/workflows/deploy.yml` runs the tests on every push and pull request.
+On a push to `main` that passes them, it connects to your server over SSH,
+pulls the code and runs `scripts/deploy.sh`, which rebuilds the image and
+replaces the container. The state volume is kept, so nothing is sent twice.
+Until the SSH secrets below are set, the deploy step is skipped.
+
+One-time server setup (any Linux VM, e.g. a Google Cloud `e2-micro`):
+
+1. Install Docker and git, and let your user run Docker:
+   ```bash
+   sudo apt update && sudo apt install -y docker.io git
+   sudo usermod -aG docker $USER   # log out and back in afterwards
+   ```
+2. Clone the repository into `~/pusher`. For a private repository, create a
+   read-only deploy key (`ssh-keygen -t ed25519 -f ~/.ssh/pusher_repo`), add the
+   `.pub` file under the repository's **Settings → Deploy keys**, and clone with
+   `GIT_SSH_COMMAND="ssh -i ~/.ssh/pusher_repo" git clone git@github.com:<owner>/<repo>.git ~/pusher`,
+   then run `git -C ~/pusher config core.sshCommand "ssh -i ~/.ssh/pusher_repo"`.
+3. Copy your `.env` to the server and restrict it (it never goes through GitHub):
+   ```bash
+   scp .env <user>@<server-ip>:~/pusher/.env
+   ssh <user>@<server-ip> chmod 600 ~/pusher/.env
+   ```
+   Leave out `X_AUTH_TOKEN` unless you use the scraper: it grants full access
+   to the X account.
+4. Create a key pair for GitHub Actions on your own machine,
+   `ssh-keygen -t ed25519 -f pusher_deploy -N ""`, and append
+   `pusher_deploy.pub` to `~/.ssh/authorized_keys` on the server.
+5. In the repository's **Settings → Secrets and variables → Actions**, add the
+   secrets `SSH_HOST` (server IP), `SSH_USER` and `SSH_KEY` (the contents of
+   the private `pusher_deploy` file). If the project isn't in `~/pusher`, add a
+   variable `DEPLOY_PATH` with its path relative to the home directory.
+6. Stop any other running copy of the bot (e.g. `docker stop pusher` on your
+   computer), otherwise every tweet is sent twice. Then push to `main`, or run
+   the workflow from the **Actions** tab, to deploy.
+
+To change `.env` later, edit it on the server and run `sh scripts/deploy.sh` there.
+
 ## Tests
 
 ```bash
