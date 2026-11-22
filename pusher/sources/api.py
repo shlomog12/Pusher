@@ -1,15 +1,19 @@
-"""Minimal client for the X (Twitter) API v2."""
+"""Tweet source backed by the official X (Twitter) API v2."""
 
 from __future__ import annotations
 
 import html
 import logging
 import time
-from typing import Any, Iterator
+from typing import TYPE_CHECKING, Any
 
 import requests
 
 from pusher.models import Media, MediaType, Tweet
+from pusher.sources.base import TweetSource, TweetSourceError, best_mp4_url, expand_urls
+
+if TYPE_CHECKING:
+    from pusher.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -20,82 +24,98 @@ MAX_RESULTS_PER_PAGE = 100
 MAX_RATE_LIMIT_WAIT_SECONDS = 15 * 60
 
 
-class TwitterApiError(RuntimeError):
+class TwitterApiError(TweetSourceError):
     """Raised when the X API returns an unexpected response."""
 
 
-class TwitterClient:
+class ApiTweetSource(TweetSource):
     def __init__(
         self,
+        username: str,
         bearer_token: str,
+        include_retweets: bool = False,
+        include_replies: bool = True,
         session: requests.Session | None = None,
         timeout: float = 30.0,
     ) -> None:
+        super().__init__(username, include_retweets, include_replies)
         self._session = session or requests.Session()
         self._session.headers.update({"Authorization": f"Bearer {bearer_token}"})
         self._timeout = timeout
+        self._user_id: str | None = None
 
-    def get_user_id(self, username: str) -> str:
-        payload = self._get(f"/users/by/username/{username}")
-        try:
-            return payload["data"]["id"]
-        except KeyError as exc:
-            raise TwitterApiError(f"User @{username} was not found: {payload}") from exc
+    @classmethod
+    def from_config(cls, config: "Config") -> "ApiTweetSource":
+        return cls(
+            username=config.watched_username,
+            bearer_token=config.require("twitter_bearer_token", "TWITTER_BEARER_TOKEN"),
+            include_retweets=config.include_retweets,
+            include_replies=config.include_replies,
+        )
 
-    def get_latest_tweet_id(self, user_id: str) -> str | None:
+    def latest_tweet_id(self) -> str | None:
         payload = self._get(
-            f"/users/{user_id}/tweets",
-            params={"max_results": 5, "tweet.fields": "id"},
+            f"/users/{self._resolve_user_id()}/tweets",
+            params={"max_results": 5, **self._exclude_param()},
         )
         return payload.get("meta", {}).get("newest_id")
 
-    def iter_new_tweets(
-        self,
-        user_id: str,
-        author_username: str,
-        since_id: str,
-        include_retweets: bool = False,
-        include_replies: bool = True,
-    ) -> Iterator[Tweet]:
-        """Yield tweets newer than ``since_id``, oldest first."""
-        excluded = []
-        if not include_retweets:
-            excluded.append("retweets")
-        if not include_replies:
-            excluded.append("replies")
-
+    def new_tweets(self, since_id: str) -> list[Tweet]:
         params: dict[str, Any] = {
             "since_id": since_id,
             "max_results": MAX_RESULTS_PER_PAGE,
             "tweet.fields": TWEET_FIELDS,
             "expansions": "attachments.media_keys",
             "media.fields": MEDIA_FIELDS,
+            **self._exclude_param(),
         }
-        if excluded:
-            params["exclude"] = ",".join(excluded)
 
         tweets: list[Tweet] = []
+        path = f"/users/{self._resolve_user_id()}/tweets"
         while True:
-            payload = self._get(f"/users/{user_id}/tweets", params=params)
+            payload = self._get(path, params=params)
             media_by_key = {
                 item["media_key"]: item
                 for item in payload.get("includes", {}).get("media", [])
             }
-            for raw in payload.get("data", []):
-                tweets.append(parse_tweet(raw, author_username, media_by_key))
-
+            tweets.extend(
+                parse_tweet(raw, self.username, media_by_key)
+                for raw in payload.get("data", [])
+            )
             next_token = payload.get("meta", {}).get("next_token")
             if not next_token:
                 break
             params["pagination_token"] = next_token
 
         tweets.sort(key=lambda tweet: int(tweet.id))
-        yield from tweets
+        return tweets
+
+    def _resolve_user_id(self) -> str:
+        if self._user_id is None:
+            payload = self._get(f"/users/by/username/{self.username}")
+            try:
+                self._user_id = payload["data"]["id"]
+            except KeyError as exc:
+                raise TwitterApiError(
+                    f"User @{self.username} was not found: {payload}"
+                ) from exc
+        return self._user_id
+
+    def _exclude_param(self) -> dict[str, str]:
+        excluded = []
+        if not self.include_retweets:
+            excluded.append("retweets")
+        if not self.include_replies:
+            excluded.append("replies")
+        return {"exclude": ",".join(excluded)} if excluded else {}
 
     def _get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         url = f"{API_BASE_URL}{path}"
         while True:
-            response = self._session.get(url, params=params, timeout=self._timeout)
+            try:
+                response = self._session.get(url, params=params, timeout=self._timeout)
+            except requests.RequestException as exc:
+                raise TwitterApiError(f"GET {path} failed: {exc}") from exc
             if response.status_code == 429:
                 self._wait_for_rate_limit(response)
                 continue
@@ -143,7 +163,7 @@ def parse_tweet(
     return Tweet(
         id=raw["id"],
         author_username=author_username,
-        text=_clean_text(text, entities.get("urls", [])),
+        text=html.unescape(expand_urls(text, entities.get("urls", []), set())).strip(),
         mentions=frozenset(mentions),
         media=media,
         created_at=raw.get("created_at"),
@@ -157,7 +177,7 @@ def parse_media(raw: dict[str, Any]) -> Media | None:
         return Media(MediaType.PHOTO, url) if url else None
 
     if media_type in ("video", "animated_gif"):
-        url = _best_video_variant(raw.get("variants", []))
+        url = best_mp4_url(raw.get("variants", []))
         if not url:
             return None
         kind = MediaType.VIDEO if media_type == "video" else MediaType.ANIMATION
@@ -165,25 +185,3 @@ def parse_media(raw: dict[str, Any]) -> Media | None:
 
     logger.debug("Skipping unsupported media type %r", media_type)
     return None
-
-
-def _best_video_variant(variants: list[dict[str, Any]]) -> str | None:
-    mp4_variants = [v for v in variants if v.get("content_type") == "video/mp4"]
-    if not mp4_variants:
-        return None
-    best = max(mp4_variants, key=lambda v: v.get("bit_rate", 0))
-    return best.get("url")
-
-
-def _clean_text(text: str, urls: list[dict[str, Any]]) -> str:
-    """Expand t.co links and drop the ones that only point at attached media."""
-    for entry in urls:
-        short_url = entry.get("url")
-        if not short_url:
-            continue
-        if entry.get("media_key"):
-            replacement = ""
-        else:
-            replacement = entry.get("expanded_url") or short_url
-        text = text.replace(short_url, replacement)
-    return html.unescape(text).strip()

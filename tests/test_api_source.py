@@ -1,5 +1,5 @@
 from pusher.models import MediaType
-from pusher.twitter_client import parse_tweet
+from pusher.sources.api import parse_tweet
 
 
 def _raw_tweet(**overrides):
