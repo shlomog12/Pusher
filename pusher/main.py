@@ -11,9 +11,10 @@ import threading
 import requests
 
 from pusher.config import Config, ConfigError
+from pusher.models import Tweet, latest_versions
 from pusher.sources import TweetSource, TweetSourceError, TweetSourceFactory
 from pusher.state import StateStore
-from pusher.telegram_client import TelegramApiError, TelegramClient
+from pusher.telegram_client import SentTweet, TelegramApiError, TelegramClient
 
 logger = logging.getLogger("pusher")
 
@@ -71,16 +72,29 @@ class TweetForwarder:
 
         sent = 0
         newest_id = since_id
-        for tweet in source.new_tweets(since_id):
+        # An edit made shortly after posting arrives with the versions before it;
+        # only the newest one is sent.
+        for tweet in latest_versions(source.new_tweets(since_id)):
             if source.wants(tweet):
-                logger.info("Forwarding tweet %s", tweet.url)
-                self._telegram.send_tweet(tweet.without_credits(self._config.credit_prefixes))
+                self._forward(tweet)
                 sent += 1
             # A merged thread can end after a later standalone tweet; never move
             # the saved id backwards, or its tweets would be sent again.
             newest_id = max(newest_id, tweet.last_id, key=int)
             self._state.save_last_tweet_id(source.username, newest_id)
         return sent
+
+    def _forward(self, tweet: Tweet) -> None:
+        """Send the tweet, or update the messages already sent for an earlier version."""
+        text_tweet = tweet.without_credits(self._config.credit_prefixes)
+        previous = self._state.load_sent_messages(tweet.edit_root_id) if tweet.is_edit else None
+        if previous is None:
+            logger.info("Forwarding tweet %s", tweet.url)
+            sent = self._telegram.send_tweet(text_tweet)
+        else:
+            logger.info("Updating the message of edited tweet %s", tweet.url)
+            sent = self._telegram.update_tweet(SentTweet.from_dict(previous), text_tweet)
+        self._state.save_sent_messages(tweet.edit_root_id, sent.to_dict())
 
 
 def _describe(source: TweetSource) -> str:

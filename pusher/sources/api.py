@@ -23,7 +23,7 @@ API_BASE_URL = "https://api.x.com/2"
 SEARCH_PATH = "/tweets/search/recent"
 TWEET_FIELDS = (
     "author_id,created_at,entities,attachments,note_tweet,referenced_tweets,"
-    "in_reply_to_user_id"
+    "in_reply_to_user_id,edit_history_tweet_ids"
 )
 MEDIA_FIELDS = "type,url,preview_image_url,variants"
 # The retweeted tweet, its media and its author, so retweets are sent in full
@@ -287,7 +287,14 @@ def parse_tweet(
         retweeted_username=retweeted_username,
         in_reply_to_id=_referenced_id(raw, "replied_to"),
         in_reply_to_username=_reply_target(raw, author_username, users_by_id),
+        first_version_id=_first_version_id(raw),
     )
+
+
+def _first_version_id(raw: dict[str, Any]) -> str | None:
+    """The id of the tweet's first version, when the tweet is an edit."""
+    history = raw.get("edit_history_tweet_ids") or []
+    return history[0] if history and history[0] != raw["id"] else None
 
 
 def _retweeted_id(raw: dict[str, Any]) -> str | None:

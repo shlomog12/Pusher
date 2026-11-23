@@ -33,9 +33,17 @@ someone had sent it to you directly.
 3. Media is first sent by URL. If Telegram can't fetch it (Telegram fetches files
    up to 20 MB by URL), the bot downloads the file and uploads it (up to 50 MB).
    If that fails too, it sends the media as links.
-4. The id of the last processed tweet of each account is saved to `STATE_FILE`,
-   so restarting doesn't send duplicates. On the first run for an account the
-   bot only records a starting point and doesn't forward older tweets.
+4. Edited tweets: on X every edit is a new tweet. When the original and its
+   edits come in the same check, only the newest version is sent. An edit that
+   comes after the original was already sent updates that Telegram message
+   instead: the text (or caption) is edited in place, or, if the media changed
+   or the text no longer fits one message, the old messages are deleted and the
+   new version is sent in their place.
+5. The id of the last processed tweet of each account is saved to `STATE_FILE`,
+   so restarting doesn't send duplicates, together with the Telegram messages
+   of the last 200 forwarded tweets, so their edits can update them. On the
+   first run for an account the bot only records a starting point and doesn't
+   forward older tweets.
 
 ## Tweet sources
 

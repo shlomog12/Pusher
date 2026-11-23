@@ -1,4 +1,4 @@
-from pusher.models import Media, MediaType, Tweet, merge_threads, strip_credits
+from pusher.models import Media, MediaType, Tweet, latest_versions, merge_threads, strip_credits
 
 PHOTO = Media(MediaType.PHOTO, "https://pbs.twimg.com/a.jpg")
 
@@ -89,3 +89,14 @@ def test_without_credits_keeps_the_mentions():
     assert stripped.text == "news"
     assert stripped.mentions_user("me")
     assert tweet.without_credits(("#other",)) is tweet
+
+
+def test_latest_versions_keeps_only_the_newest_edit():
+    tweets = [
+        _tweet("1", "v1"),
+        _tweet("2", "other"),
+        _tweet("3", "v2", first_version_id="1"),
+        _tweet("4", "v3", first_version_id="1"),
+    ]
+
+    assert [t.id for t in latest_versions(tweets)] == ["2", "4"]

@@ -251,3 +251,13 @@ def test_threads_can_be_turned_off():
     _source(session, include_threads=False).new_tweets("100")
 
     assert len(session.calls) == 1
+
+
+def test_parse_tweet_reads_the_first_version_of_an_edit():
+    history = ["90", "95", "100"]
+
+    edit = parse_tweet(_raw_tweet(edit_history_tweet_ids=history), "page", MEDIA)
+    first = parse_tweet(_raw_tweet(id="90", edit_history_tweet_ids=history), "page", MEDIA)
+
+    assert edit.is_edit and edit.edit_root_id == "90"
+    assert not first.is_edit and first.edit_root_id == "90"

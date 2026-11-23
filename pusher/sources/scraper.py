@@ -324,7 +324,16 @@ def parse_tweet_result(result: dict[str, Any], author_username: str) -> Tweet | 
         retweeted_username=retweeted_username,
         in_reply_to_id=outer_legacy.get("in_reply_to_status_id_str") or None,
         in_reply_to_username=outer_legacy.get("in_reply_to_screen_name") or None,
+        first_version_id=_first_version_id(result, tweet_id),
     )
+
+
+def _first_version_id(result: dict[str, Any], tweet_id: str) -> str | None:
+    """The id of the tweet's first version, when the tweet is an edit."""
+    control = result.get("edit_control") or {}
+    history = (control.get("edit_control_initial") or control).get("edit_tweet_ids") or []
+    first = control.get("initial_tweet_id") or (history[0] if history else None)
+    return first if first and first != tweet_id else None
 
 
 def parse_media(raw: dict[str, Any]) -> Media | None:

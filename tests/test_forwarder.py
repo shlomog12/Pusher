@@ -5,6 +5,7 @@ from pusher.main import TweetForwarder
 from pusher.models import Tweet
 from pusher.sources.base import TweetSource, TweetSourceError
 from pusher.state import StateStore
+from pusher.telegram_client import SentTweet
 
 
 class FakeSource(TweetSource):
@@ -27,10 +28,16 @@ class FakeTelegram:
     def __init__(self):
         self.sent = []
         self.texts = []
+        self.updated = []
 
     def send_tweet(self, tweet):
         self.sent.append(tweet.id)
         self.texts.append(tweet.text)
+        return SentTweet((len(self.sent),), len(self.sent))
+
+    def update_tweet(self, sent, tweet):
+        self.updated.append((sent.message_ids, tweet.id))
+        return sent
 
 
 def _config(tmp_path):
@@ -124,3 +131,43 @@ def test_credits_are_removed_from_the_sent_text(tmp_path):
     TweetForwarder(config, [FakeSource("Page", [tweet])], telegram, state).run_once()
 
     assert telegram.texts == ["news"]
+
+
+def _edit(tweet_id, first_version_id):
+    return replace(_tweet(tweet_id, {"me"}), first_version_id=first_version_id)
+
+
+def test_only_the_newest_version_of_an_edited_tweet_is_sent(tmp_path):
+    versions = [_tweet("91", {"me"}), _edit("92", "91"), _edit("93", "91"), _tweet("94", {"me"})]
+    source = FakeSource("Page", versions, mentioned_usernames=["me"])
+    forwarder, telegram, state = _forwarder(tmp_path, source)
+    state.save_last_tweet_id("Page", "90")
+
+    assert forwarder.run_once() == 2
+    assert telegram.sent == ["93", "94"]
+    assert state.load_last_tweet_id("page") == "94"
+
+
+def test_a_later_edit_updates_the_message_already_sent(tmp_path):
+    source = FakeSource("Page", [_tweet("91", {"me"})], mentioned_usernames=["me"])
+    forwarder, telegram, state = _forwarder(tmp_path, source)
+    state.save_last_tweet_id("Page", "90")
+    forwarder.run_once()
+
+    source.tweets.append(_edit("95", "91"))
+    forwarder.run_once()
+
+    assert telegram.sent == ["91"]
+    assert telegram.updated == [((1,), "95")]
+    assert state.load_sent_messages("91") == SentTweet((1,), 1).to_dict()
+
+
+def test_an_edit_of_a_tweet_that_was_not_sent_is_sent(tmp_path):
+    source = FakeSource("Page", [_edit("95", "91")], mentioned_usernames=["me"])
+    forwarder, telegram, state = _forwarder(tmp_path, source)
+    state.save_last_tweet_id("Page", "94")
+
+    forwarder.run_once()
+
+    assert telegram.sent == ["95"]
+    assert telegram.updated == []

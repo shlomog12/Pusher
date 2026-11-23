@@ -4,6 +4,7 @@ import pytest
 
 from pusher.models import Media, MediaType, Tweet
 from pusher.telegram_client import (
+    SentTweet,
     MAX_CAPTION_LENGTH,
     MAX_MESSAGE_LENGTH,
     TelegramClient,
@@ -44,7 +45,7 @@ class FakeSession:
         self.posts.append({"method": url.rsplit("/", 1)[-1], "data": data, "files": files})
         if self._responses:
             return FakeResponse(self._responses.pop(0))
-        return FakeResponse({"ok": True, "result": {}})
+        return FakeResponse({"ok": True, "result": {"message_id": len(self.posts)}})
 
     def get(self, url, stream=False, timeout=None):
         self.gets.append(url)
@@ -165,3 +166,79 @@ def test_media_only_tweet_is_sent_without_caption(session):
 
     assert [p["method"] for p in session.posts] == ["sendPhoto"]
     assert "caption" not in session.posts[0]["data"]
+
+
+def test_send_tweet_returns_the_sent_messages(session):
+    client = TelegramClient("token", "42", session=session)
+
+    assert client.send_tweet(_tweet()) == SentTweet((1,), 1)
+    assert client.send_tweet(_tweet(media=(PHOTO,))) == SentTweet((2,), 2, (PHOTO.url,))
+
+
+def test_media_group_message_ids_are_returned():
+    group = {"ok": True, "result": [{"message_id": 7}, {"message_id": 8}]}
+    session = FakeSession([group])
+
+    sent = TelegramClient("token", "42", session=session).send_tweet(_tweet(media=(PHOTO, VIDEO)))
+
+    assert sent == SentTweet((7, 8), 7, (PHOTO.url, VIDEO.url))
+
+
+def test_long_text_with_media_has_no_single_text_message(session):
+    sent = TelegramClient("token", "42", session=session).send_tweet(
+        _tweet("x" * (MAX_CAPTION_LENGTH + 1), media=(PHOTO,))
+    )
+
+    assert sent == SentTweet((1, 2), None, (PHOTO.url,))
+
+
+def test_update_edits_the_text_in_place(session):
+    client = TelegramClient("token", "42", session=session)
+
+    sent = client.update_tweet(SentTweet((5,), 5), _tweet("fixed"))
+
+    post = session.posts[0]
+    assert post["method"] == "editMessageText"
+    assert post["data"]["message_id"] == 5
+    assert post["data"]["text"] == "fixed"
+    assert sent == SentTweet((5,), 5)
+
+
+def test_update_edits_the_caption_when_the_media_is_the_same(session):
+    client = TelegramClient("token", "42", session=session)
+
+    client.update_tweet(SentTweet((5, 6), 5, (PHOTO.url, VIDEO.url)), _tweet("fixed", (PHOTO, VIDEO)))
+
+    assert [p["method"] for p in session.posts] == ["editMessageCaption"]
+    assert session.posts[0]["data"]["caption"] == "fixed"
+
+
+def test_unchanged_text_counts_as_updated():
+    session = FakeSession([{"ok": False, "description": "Bad Request: message is not modified"}])
+
+    sent = TelegramClient("token", "42", session=session).update_tweet(SentTweet((5,), 5), _tweet())
+
+    assert sent == SentTweet((5,), 5)
+    assert len(session.posts) == 1
+
+
+def test_update_with_other_media_replaces_the_messages(session):
+    client = TelegramClient("token", "42", session=session)
+
+    sent = client.update_tweet(SentTweet((5,), 5), _tweet(media=(PHOTO,)))
+
+    assert [p["method"] for p in session.posts] == ["sendPhoto", "deleteMessage"]
+    assert session.posts[1]["data"]["message_id"] == 5
+    assert sent == SentTweet((1,), 1, (PHOTO.url,))
+
+
+def test_failed_edit_sends_the_tweet_again():
+    session = FakeSession([{"ok": False, "description": "Bad Request: message to edit not found"}])
+
+    TelegramClient("token", "42", session=session).update_tweet(SentTweet((5,), 5), _tweet())
+
+    assert [p["method"] for p in session.posts] == [
+        "editMessageText",
+        "sendMessage",
+        "deleteMessage",
+    ]

@@ -33,6 +33,9 @@ class Tweet:
     in_reply_to_username: str | None = None
     # Ids of the author's follow-up tweets merged into this one (see ``with_thread``).
     thread_ids: tuple[str, ...] = ()
+    # On X every edit is a new tweet; this is the id of the first version when
+    # this tweet is an edit of it.
+    first_version_id: str | None = None
 
     @property
     def url(self) -> str:
@@ -53,6 +56,15 @@ class Tweet:
             self.is_reply
             and (self.in_reply_to_username or "").lower() == self.author_username.lower()
         )
+
+    @property
+    def edit_root_id(self) -> str:
+        """The id shared by all versions of this tweet."""
+        return self.first_version_id or self.id
+
+    @property
+    def is_edit(self) -> bool:
+        return self.edit_root_id != self.id
 
     @property
     def last_id(self) -> str:
@@ -102,6 +114,16 @@ def merge_threads(tweets: list[Tweet]) -> list[Tweet]:
             continuations[root_id] = []
         root_of[tweet.id] = root_id
     return [root.with_thread(continuations[root_id]) for root_id, root in roots.items()]
+
+
+def latest_versions(tweets: list[Tweet]) -> list[Tweet]:
+    """Drop every tweet that has a newer edit in the list, keeping the list order."""
+    newest: dict[str, str] = {}
+    for tweet in tweets:
+        current = newest.get(tweet.edit_root_id)
+        if current is None or int(tweet.id) > int(current):
+            newest[tweet.edit_root_id] = tweet.id
+    return [tweet for tweet in tweets if newest[tweet.edit_root_id] == tweet.id]
 
 
 _PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n")

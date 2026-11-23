@@ -173,3 +173,20 @@ def test_without_threads_self_replies_are_replies():
     )
 
     assert [t.text for t in source.new_tweets("500")] == ["a"]
+
+
+def test_edits_point_to_the_first_version():
+    first = _tweet_result("201", "Page", "v1")
+    first["edit_control"] = {"edit_tweet_ids": ["201", "205"]}
+    edit = _tweet_result("205", "Page", "v2")
+    edit["edit_control"] = {
+        "initial_tweet_id": "201",
+        "edit_control_initial": {"edit_tweet_ids": ["201", "205"]},
+    }
+
+    parsed = parse_timeline([_payload(first, edit)], "page")
+
+    assert [(t.id, t.edit_root_id, t.is_edit) for t in parsed] == [
+        ("201", "201", False),
+        ("205", "201", True),
+    ]
