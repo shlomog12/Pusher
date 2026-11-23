@@ -63,9 +63,13 @@ def _optional_handle(name: str) -> str | None:
     return value.lstrip("@") if value else None
 
 
-def _handle_list(name: str) -> tuple[str, ...]:
+def _text_list(name: str) -> tuple[str, ...]:
     raw = os.getenv(name, "")
-    return tuple(item.strip().lstrip("@") for item in raw.split(",") if item.strip())
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
+
+
+def _handle_list(name: str) -> tuple[str, ...]:
+    return tuple(item.lstrip("@") for item in _text_list(name))
 
 
 @dataclass(frozen=True)
@@ -95,6 +99,8 @@ class Config:
     include_retweets: bool = False
     include_replies: bool = False
     include_threads: bool = True
+    # A line starting with one of these, and the rest of its paragraph, is removed.
+    credit_prefixes: tuple[str, ...] = ()
     state_file: Path = Path("state.json")
     log_level: str = "INFO"
     twitter_bearer_token: str | None = None
@@ -171,6 +177,7 @@ class Config:
             include_retweets=_bool("INCLUDE_RETWEETS", False),
             include_replies=_bool("INCLUDE_REPLIES", False),
             include_threads=_bool("INCLUDE_THREADS", True),
+            credit_prefixes=_text_list("CREDIT_PREFIXES"),
             state_file=Path(os.getenv("STATE_FILE", "state.json")),
             log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
             twitter_bearer_token=_optional("TWITTER_BEARER_TOKEN"),

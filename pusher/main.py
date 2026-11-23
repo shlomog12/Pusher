@@ -74,7 +74,7 @@ class TweetForwarder:
         for tweet in source.new_tweets(since_id):
             if source.wants(tweet):
                 logger.info("Forwarding tweet %s", tweet.url)
-                self._telegram.send_tweet(tweet)
+                self._telegram.send_tweet(tweet.without_credits(self._config.credit_prefixes))
                 sent += 1
             # A merged thread can end after a later standalone tweet; never move
             # the saved id backwards, or its tweets would be sent again.

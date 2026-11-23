@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from pusher.config import Config
 from pusher.main import TweetForwarder
 from pusher.models import Tweet
@@ -24,9 +26,11 @@ class FakeSource(TweetSource):
 class FakeTelegram:
     def __init__(self):
         self.sent = []
+        self.texts = []
 
     def send_tweet(self, tweet):
         self.sent.append(tweet.id)
+        self.texts.append(tweet.text)
 
 
 def _config(tmp_path):
@@ -108,3 +112,15 @@ def test_merged_thread_moves_state_to_its_newest_tweet(tmp_path):
 
     assert forwarder.run_once() == 2
     assert state.load_last_tweet_id("page") == "85"
+
+
+def test_credits_are_removed_from_the_sent_text(tmp_path):
+    config = replace(_config(tmp_path), credit_prefixes=("#show",))
+    state = StateStore(config.state_file)
+    state.save_last_tweet_id("page", "1")
+    tweet = replace(_tweet("2", {"me"}), text="news\n\n#show with @me")
+    telegram = FakeTelegram()
+
+    TweetForwarder(config, [FakeSource("Page", [tweet])], telegram, state).run_once()
+
+    assert telegram.texts == ["news"]

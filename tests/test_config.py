@@ -70,3 +70,12 @@ def test_missing_mentioned_usernames_raise(env):
 def test_forward_my_tweets_requires_my_username(env):
     with pytest.raises(ConfigError, match="TWITTER_MY_USERNAME"):
         env(TWITTER_MENTIONED_USERNAMES="friend", FORWARD_MY_TWEETS="true")
+
+
+def test_credit_prefixes_are_parsed_as_a_list(env, monkeypatch):
+    monkeypatch.delenv("CREDIT_PREFIXES", raising=False)
+    assert env(TWITTER_MENTIONED_USERNAMES="me").credit_prefixes == ()
+
+    config = env(CREDIT_PREFIXES=" #מהדורתכאןחדשות , כאן חדשות ברשת ב' ,")
+
+    assert config.credit_prefixes == ("#מהדורתכאןחדשות", "כאן חדשות ברשת ב'")

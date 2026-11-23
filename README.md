@@ -107,10 +107,37 @@ TweetSourceFactory.register("rss", RssTweetSource.from_config)
 | `INCLUDE_RETWEETS` | no | `false` | Also check the watched account's retweets |
 | `INCLUDE_REPLIES` | no | `false` | Also forward replies, from the watched account and from you |
 | `INCLUDE_THREADS` | no | `true` | Send a thread as one message with the rest of its tweets |
+| `CREDIT_PREFIXES` | no | | Comma-separated; a line that starts with one of these is removed from the message, with the rest of its paragraph (see [Removing credits](#removing-credits)) |
 | `STATE_FILE` | no | `state.json` | Where the last processed tweet id is stored |
 | `LOG_LEVEL` | no | `INFO` | Logging level |
 
 \* Required unless `TWITTER_MY_USERNAME` is set, which is then used as the only entry.
+
+### Removing credits
+
+Some tweets end with a credit, such as the show and its host, that you may not
+want in the message. List how those lines start in `CREDIT_PREFIXES`:
+
+```
+CREDIT_PREFIXES=#מהדורתכאןחדשות,כאן חדשות ברשת ב'
+```
+
+Each line that starts with one of the prefixes (ignoring case and leading
+spaces) is removed, together with the following lines of its paragraph, up to
+the next blank line. So for
+
+```
+... | @yaara_shapira עם הפרטים
+
+כאן חדשות ברשת ב' 🎙️| #הבוקרהזה
+@yaara_shapira
+
+https://www.kan.org.il/...
+```
+
+the second paragraph is removed, while the tag in the first one and the link
+are kept. Only the message text changes: which tweets are forwarded still
+depends on all their tags.
 
 ### API source notes
 

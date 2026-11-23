@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, replace
 from enum import Enum
 
@@ -61,6 +62,11 @@ class Tweet:
     def mentions_user(self, username: str) -> bool:
         return username.lower() in self.mentions
 
+    def without_credits(self, prefixes: tuple[str, ...]) -> "Tweet":
+        """This tweet with the credit lines that start with ``prefixes`` removed."""
+        text = strip_credits(self.text, prefixes)
+        return self if text == self.text else replace(self, text=text)
+
     def with_thread(self, continuations: "list[Tweet]") -> "Tweet":
         """This tweet with the given follow-up tweets appended to its text and media."""
         if not continuations:
@@ -96,3 +102,27 @@ def merge_threads(tweets: list[Tweet]) -> list[Tweet]:
             continuations[root_id] = []
         root_of[tweet.id] = root_id
     return [root.with_thread(continuations[root_id]) for root_id, root in roots.items()]
+
+
+_PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n")
+
+
+def strip_credits(text: str, prefixes: tuple[str, ...]) -> str:
+    """Remove every line that starts with one of ``prefixes`` and the rest of its paragraph.
+
+    A credit such as "#show with @host" usually closes a tweet, sometimes
+    followed by a link. Tags elsewhere in the text are kept.
+    """
+    if not prefixes:
+        return text
+    lowered = tuple(prefix.lower() for prefix in prefixes)
+    paragraphs = []
+    for paragraph in _PARAGRAPH_BREAK.split(text):
+        kept = []
+        for line in paragraph.split("\n"):
+            if line.strip().lower().startswith(lowered):
+                break
+            kept.append(line)
+        if any(line.strip() for line in kept):
+            paragraphs.append("\n".join(kept).rstrip())
+    return "\n\n".join(paragraphs).strip()
