@@ -79,3 +79,13 @@ def test_credit_prefixes_are_parsed_as_a_list(env, monkeypatch):
     config = env(CREDIT_PREFIXES=" #מהדורתכאןחדשות , כאן חדשות ברשת ב' ,")
 
     assert config.credit_prefixes == ("#מהדורתכאןחדשות", "כאן חדשות ברשת ב'")
+
+
+def test_removing_tag_credits_and_links_is_off_unless_set(env, monkeypatch):
+    monkeypatch.delenv("REMOVE_TAG_CREDITS", raising=False)
+    monkeypatch.delenv("REMOVE_LINKS", raising=False)
+    config = env(TWITTER_MENTIONED_USERNAMES="me")
+    assert (config.remove_tag_credits, config.remove_links) == (False, False)
+
+    config = env(REMOVE_TAG_CREDITS="true", REMOVE_LINKS="true")
+    assert (config.remove_tag_credits, config.remove_links) == (True, True)

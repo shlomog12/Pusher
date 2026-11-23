@@ -99,8 +99,10 @@ class Config:
     include_retweets: bool = False
     include_replies: bool = False
     include_threads: bool = True
-    # A line starting with one of these, and the rest of its paragraph, is removed.
+    # A line starting with one of these is removed from the message.
     credit_prefixes: tuple[str, ...] = ()
+    remove_tag_credits: bool = False
+    remove_links: bool = False
     state_file: Path = Path("state.json")
     log_level: str = "INFO"
     twitter_bearer_token: str | None = None
@@ -178,6 +180,8 @@ class Config:
             include_replies=_bool("INCLUDE_REPLIES", False),
             include_threads=_bool("INCLUDE_THREADS", True),
             credit_prefixes=_text_list("CREDIT_PREFIXES"),
+            remove_tag_credits=_bool("REMOVE_TAG_CREDITS", False),
+            remove_links=_bool("REMOVE_LINKS", False),
             state_file=Path(os.getenv("STATE_FILE", "state.json")),
             log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
             twitter_bearer_token=_optional("TWITTER_BEARER_TOKEN"),

@@ -87,6 +87,10 @@ class TweetForwarder:
     def _forward(self, tweet: Tweet) -> None:
         """Send the tweet, or update the messages already sent for an earlier version."""
         text_tweet = tweet.without_credits(self._config.credit_prefixes)
+        if self._config.remove_tag_credits:
+            text_tweet = text_tweet.without_tag_credits()
+        if self._config.remove_links:
+            text_tweet = text_tweet.without_links()
         previous = self._state.load_sent_messages(tweet.edit_root_id) if tweet.is_edit else None
         if previous is None:
             logger.info("Forwarding tweet %s", tweet.url)

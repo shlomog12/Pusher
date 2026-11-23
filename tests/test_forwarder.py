@@ -133,6 +133,34 @@ def test_credits_are_removed_from_the_sent_text(tmp_path):
     assert telegram.texts == ["news"]
 
 
+def test_tag_credits_are_removed_from_the_sent_text_only_when_configured(tmp_path):
+    text = "news | @reporter עם הפרטים\n\n#show עם @host"
+    for remove_tag_credits, expected in ((True, "news"), (False, text)):
+        config = replace(_config(tmp_path), remove_tag_credits=remove_tag_credits)
+        state = StateStore(config.state_file)
+        state.save_last_tweet_id("page", "1")
+        telegram = FakeTelegram()
+        tweet = replace(_tweet("2", {"me"}), text=text)
+
+        TweetForwarder(config, [FakeSource("Page", [tweet])], telegram, state).run_once()
+
+        assert telegram.texts == [expected]
+
+
+def test_links_are_removed_from_the_sent_text_only_when_configured(tmp_path):
+    text = "news\n\nhttps://www.kan.org.il/content/kan-news/politic/live-1122206/"
+    for remove_links, expected in ((True, "news"), (False, text)):
+        config = replace(_config(tmp_path), remove_links=remove_links)
+        state = StateStore(config.state_file)
+        state.save_last_tweet_id("page", "1")
+        telegram = FakeTelegram()
+        tweet = replace(_tweet("2", {"me"}), text=text)
+
+        TweetForwarder(config, [FakeSource("Page", [tweet])], telegram, state).run_once()
+
+        assert telegram.texts == [expected]
+
+
 def _edit(tweet_id, first_version_id):
     return replace(_tweet(tweet_id, {"me"}), first_version_id=first_version_id)
 

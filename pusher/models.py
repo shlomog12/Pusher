@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from enum import Enum
 
@@ -79,6 +80,16 @@ class Tweet:
         text = strip_credits(self.text, prefixes)
         return self if text == self.text else replace(self, text=text)
 
+    def without_tag_credits(self) -> "Tweet":
+        """This tweet with the reporters' tag credits removed from its text."""
+        text = strip_tag_credits(self.text)
+        return self if text == self.text else replace(self, text=text)
+
+    def without_links(self) -> "Tweet":
+        """This tweet with the links removed from its text."""
+        text = strip_links(self.text)
+        return self if text == self.text else replace(self, text=text)
+
     def with_thread(self, continuations: "list[Tweet]") -> "Tweet":
         """This tweet with the given follow-up tweets appended to its text and media."""
         if not continuations:
@@ -127,24 +138,69 @@ def latest_versions(tweets: list[Tweet]) -> list[Tweet]:
 
 
 _PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n")
+_LINK = re.compile(r"[ \t]*https?://\S+")
+_TAGS = r"(?:@\w+\s*)+"
+# A part of a line that only credits reporters by their tags.
+_TAG_CREDIT = re.compile(
+    r"\s*(?:"
+    rf"{_TAGS}(?:\([^)]*\))?"  # @reporter, maybe with a note like (צילום: ...)
+    rf"|ה?פרסום\s+של\s+{_TAGS}"  # פרסום של @reporter
+    rf"|{_TAGS}עם\s+הפרטים"  # @reporter עם הפרטים
+    rf"|עם\s+הפרטים\s+{_TAGS}"  # עם הפרטים @reporter
+    rf"|(?:#\w+\s*)+עם\s+{_TAGS}"  # #show עם @host
+    r")\s*"
+)
 
 
 def strip_credits(text: str, prefixes: tuple[str, ...]) -> str:
-    """Remove every line that starts with one of ``prefixes`` and the rest of its paragraph.
-
-    A credit such as "#show with @host" usually closes a tweet, sometimes
-    followed by a link. Tags elsewhere in the text are kept.
-    """
+    """Remove every line that starts with one of ``prefixes`` from ``text``."""
     if not prefixes:
         return text
     lowered = tuple(prefix.lower() for prefix in prefixes)
+    return _map_lines(text, lambda line: None if line.strip().lower().startswith(lowered) else line)
+
+
+def strip_tag_credits(text: str) -> str:
+    """Remove the parts of lines that only credit reporters by their tags.
+
+    A line, or a part of it after a "|", is removed when it holds only tags, or
+    tags in a credit such as "פרסום של @reporter", "@reporter עם הפרטים" or
+    "#show עם @host". A link in such a part is kept, and so is a tag anywhere
+    in the text of the tweet itself.
+    """
+    return _map_lines(text, _strip_line_tag_credits)
+
+
+def _strip_line_tag_credits(line: str) -> str | None:
+    parts = line.split("|")
+    kept = []
+    for part in parts:
+        links = [link.strip() for link in _LINK.findall(part)]
+        if _TAG_CREDIT.fullmatch(_LINK.sub("", part)):
+            kept.extend(links)
+        else:
+            kept.append(part)
+    if kept == parts:
+        return line
+    kept = [part.strip() for part in kept if part.strip()]
+    return " | ".join(kept) or None
+
+
+def strip_links(text: str) -> str:
+    """Remove the links from ``text``, and the lines and paragraphs left empty."""
+
+    def strip(line: str) -> str | None:
+        stripped = _LINK.sub("", line)
+        return line if stripped == line else stripped.strip() or None
+
+    return _map_lines(text, strip)
+
+
+def _map_lines(text: str, change: Callable[[str], str | None]) -> str:
+    """Replace each line by ``change(line)``, dropping it on None, and the empty paragraphs."""
     paragraphs = []
     for paragraph in _PARAGRAPH_BREAK.split(text):
-        kept = []
-        for line in paragraph.split("\n"):
-            if line.strip().lower().startswith(lowered):
-                break
-            kept.append(line)
+        kept = [changed for line in paragraph.split("\n") if (changed := change(line)) is not None]
         if any(line.strip() for line in kept):
             paragraphs.append("\n".join(kept).rstrip())
     return "\n\n".join(paragraphs).strip()

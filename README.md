@@ -115,7 +115,9 @@ TweetSourceFactory.register("rss", RssTweetSource.from_config)
 | `INCLUDE_RETWEETS` | no | `false` | Also check the watched account's retweets |
 | `INCLUDE_REPLIES` | no | `false` | Also forward replies, from the watched account and from you |
 | `INCLUDE_THREADS` | no | `true` | Send a thread as one message with the rest of its tweets |
-| `CREDIT_PREFIXES` | no | | Comma-separated; a line that starts with one of these is removed from the message, with the rest of its paragraph (see [Removing credits](#removing-credits)) |
+| `REMOVE_TAG_CREDITS` | no | `false` | `true` removes the tags that credit reporters, such as `@reporter עם הפרטים` (see [Removing credits](#removing-credits)) |
+| `CREDIT_PREFIXES` | no | | Comma-separated; a line that starts with one of these is removed from the message (see [Removing credits](#removing-credits)) |
+| `REMOVE_LINKS` | no | `false` | `true` removes the links from the message text, so it has no link preview either |
 | `STATE_FILE` | no | `state.json` | Where the last processed tweet id is stored |
 | `LOG_LEVEL` | no | `INFO` | Logging level |
 
@@ -123,28 +125,42 @@ TweetSourceFactory.register("rss", RssTweetSource.from_config)
 
 ### Removing credits
 
-Some tweets end with a credit, such as the show and its host, that you may not
-want in the message. List how those lines start in `CREDIT_PREFIXES`:
+Some tweets end with a credit, such as the reporter's tag or the show and its
+host, that you may not want in the message.
+
+Set `REMOVE_TAG_CREDITS=true` to remove the tags that credit reporters. A line,
+or a part of a line after a `|`, is removed when it holds only:
+
+| Credit | Example |
+| --- | --- |
+| Tags, maybe with a note in parentheses | `@yaara_shapira @glick_sh`, `@yaara_shapira (צילום: 27א')` |
+| A publication credit | `פרסום של @glick_sh`, `הפרסום של @yaara_shapira` |
+| A credit for the details | `@yaara_shapira עם הפרטים`, `עם הפרטים @yaara_shapira` |
+| A show with its host | `#מהדורתכאןחדשות עם @talberman` |
+
+A link on such a line is kept, and so is a tag inside the text of the tweet. So
 
 ```
-CREDIT_PREFIXES=#מהדורתכאןחדשות,כאן חדשות ברשת ב'
+לא תוקם ועדת חקירה ממלכתית | הפרסום של @yaara_shapira
+
+#חדשותשישי עם @eliorlevy
 ```
 
-Each line that starts with one of the prefixes (ignoring case and leading
-spaces) is removed, together with the following lines of its paragraph, up to
-the next blank line. So for
+is sent as `לא תוקם ועדת חקירה ממלכתית`, while `@yaara_shapira עם הפרטים על המו"מ: ...`
+is left as it is.
+
+For other credits, list how their lines start in `CREDIT_PREFIXES`; each line
+that starts with one of them (ignoring case and leading spaces) is removed:
 
 ```
-... | @yaara_shapira עם הפרטים
-
-כאן חדשות ברשת ב' 🎙️| #הבוקרהזה
-@yaara_shapira
-
-https://www.kan.org.il/...
+CREDIT_PREFIXES=כאן חדשות ברשת ב'
 ```
 
-the second paragraph is removed, while the tag in the first one and the link
-are kept. Only the message text changes: which tweets are forwarded still
+To also send the messages without the links in the tweet text (such as the
+article link at the end), set `REMOVE_LINKS=true`.
+
+Each of these can be turned off again by clearing or setting it back to
+`false`. Only the message text changes: which tweets are forwarded still
 depends on all their tags.
 
 ### API source notes
