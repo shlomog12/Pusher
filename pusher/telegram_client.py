@@ -99,7 +99,9 @@ class TelegramClient:
                 "chat_id": self._chat_id,
                 "text": text,
                 "parse_mode": "HTML",
-                "disable_web_page_preview": "true",
+                # Show the preview card of the first link (e.g. an article's
+                # image and title), large like on X.
+                "link_preview_options": json.dumps({"prefer_large_media": True}),
             },
         )
 

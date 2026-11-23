@@ -23,7 +23,7 @@ someone had sent it to you directly.
      `FORWARD_MY_RETWEETS=true`
 2. Each of those tweets is forwarded to `TELEGRAM_CHAT_ID`. Retweets are sent
    with the full text and media of the original tweet:
-   - no media → a text message
+   - no media → a text message, with the preview card of its first link (e.g. an article's image and title)
    - one photo / video / GIF → `sendPhoto` / `sendVideo` / `sendAnimation` with the text as caption
    - several media → an album (`sendMediaGroup`)
    - text over Telegram's 1024-character caption limit → the text goes in its own message, followed by the media

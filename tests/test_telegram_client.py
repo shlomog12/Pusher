@@ -71,6 +71,14 @@ def test_text_only_tweet_sends_message(session):
     assert "hello @me" in session.posts[0]["data"]["text"]
 
 
+def test_text_message_shows_link_preview(session):
+    TelegramClient("token", "42", session=session).send_tweet(_tweet("read https://example.com/a"))
+
+    data = session.posts[0]["data"]
+    assert "disable_web_page_preview" not in data
+    assert json.loads(data["link_preview_options"]) == {"prefer_large_media": True}
+
+
 def test_single_video_sent_with_caption(session):
     TelegramClient("token", "42", session=session).send_tweet(_tweet(media=(VIDEO,)))
 
