@@ -137,8 +137,11 @@ or a part of a line after a `|`, is removed when it holds only:
 | A publication credit | `פרסום של @glick_sh`, `הפרסום של @yaara_shapira` |
 | A credit for the details | `@yaara_shapira עם הפרטים`, `עם הפרטים @yaara_shapira` |
 | A show with its host | `#מהדורתכאןחדשות עם @talberman` |
+| Where the report is from | `אצל @mayarachlin` |
 
-A link on such a line is kept, and so is a tag inside the text of the tweet. So
+A link on such a line is kept, and so is a tag inside the text of the tweet.
+The tags X puts at the start of each follow-up of a thread are not added to the
+message either. So
 
 ```
 לא תוקם ועדת חקירה ממלכתית | הפרסום של @yaara_shapira

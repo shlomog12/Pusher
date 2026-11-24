@@ -95,14 +95,28 @@ class Tweet:
         if not continuations:
             return self
         parts = [self, *continuations]
+        texts = [self.text]
+        known = {self.author_username.lower(), *self.mentions}
+        for part in continuations:
+            texts.append(_without_reply_tags(part.text, known))
+            known |= part.mentions
         return replace(
             self,
-            text="\n\n".join(part.text for part in parts if part.text),
+            text="\n\n".join(text for text in texts if text),
             mentions=frozenset().union(*(part.mentions for part in parts)),
             media=tuple(item for part in parts for item in part.media),
             thread_ids=self.thread_ids
             + tuple(i for part in continuations for i in (part.id, *part.thread_ids)),
         )
+
+
+def _without_reply_tags(text: str, known: set[str]) -> str:
+    """``text`` without the tags X puts before a reply to the earlier tweets of a thread."""
+    while match := _LEADING_TAG.match(text):
+        if match.group(1).lower() not in known:
+            break
+        text = text[match.end():]
+    return text
 
 
 def merge_threads(tweets: list[Tweet]) -> list[Tweet]:
@@ -139,6 +153,9 @@ def latest_versions(tweets: list[Tweet]) -> list[Tweet]:
 
 _PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n")
 _LINK = re.compile(r"[ \t]*https?://\S+")
+_LEADING_TAG = re.compile(r"\s*@(\w+)\s*")
+# Direction marks that X may put around tags and hashtags in right-to-left text.
+_DIRECTION_MARKS = re.compile("[\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 _TAGS = r"(?:@\w+\s*)+"
 # A part of a line that only credits reporters by their tags.
 _TAG_CREDIT = re.compile(
@@ -148,6 +165,7 @@ _TAG_CREDIT = re.compile(
     rf"|{_TAGS}עם\s+הפרטים"  # @reporter עם הפרטים
     rf"|עם\s+הפרטים\s+{_TAGS}"  # עם הפרטים @reporter
     rf"|(?:#\w+\s*)+עם\s+{_TAGS}"  # #show עם @host
+    rf"|אצל\s+{_TAGS}"  # אצל @reporter
     r")\s*"
 )
 
@@ -164,9 +182,9 @@ def strip_tag_credits(text: str) -> str:
     """Remove the parts of lines that only credit reporters by their tags.
 
     A line, or a part of it after a "|", is removed when it holds only tags, or
-    tags in a credit such as "פרסום של @reporter", "@reporter עם הפרטים" or
-    "#show עם @host". A link in such a part is kept, and so is a tag anywhere
-    in the text of the tweet itself.
+    tags in a credit such as "פרסום של @reporter", "@reporter עם הפרטים",
+    "אצל @reporter" or "#show עם @host". A link in such a part is kept, and so
+    is a tag anywhere in the text of the tweet itself.
     """
     return _map_lines(text, _strip_line_tag_credits)
 
@@ -176,7 +194,7 @@ def _strip_line_tag_credits(line: str) -> str | None:
     kept = []
     for part in parts:
         links = [link.strip() for link in _LINK.findall(part)]
-        if _TAG_CREDIT.fullmatch(_LINK.sub("", part)):
+        if _TAG_CREDIT.fullmatch(_DIRECTION_MARKS.sub("", _LINK.sub("", part))):
             kept.extend(links)
         else:
             kept.append(part)

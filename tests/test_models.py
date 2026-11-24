@@ -35,6 +35,26 @@ def test_merge_threads_joins_self_replies_into_the_first_tweet():
     assert standalone.last_id == "2"
 
 
+def test_merge_threads_drops_the_reply_tags_x_puts_before_a_follow_up():
+    tweets = [
+        _tweet("1", "בנט נפגש עם הנשיא\n\nאצל @mayarachlin", mentions=frozenset({"mayarachlin"})),
+        _tweet(
+            "2",
+            "@mayarachlin @page בית הנשיא: הנשיא נפגש עם כל הצדדים",
+            parent="1",
+            mentions=frozenset({"mayarachlin", "page"}),
+        ),
+        _tweet("3", "@someone אמר כי", parent="2", mentions=frozenset({"someone"})),
+    ]
+
+    [thread] = merge_threads(tweets)
+
+    assert thread.text == (
+        "בנט נפגש עם הנשיא\n\nאצל @mayarachlin\n\n"
+        "בית הנשיא: הנשיא נפגש עם כל הצדדים\n\n@someone אמר כי"
+    )
+
+
 def test_self_reply_without_its_parent_stays_on_its_own():
     [tweet] = merge_threads([_tweet("7", "4/ added later", parent="1")])
 
@@ -111,6 +131,16 @@ def test_strip_tag_credits_removes_a_credit_after_a_bar_and_a_show_with_its_host
         text = f"לא תוקם ועדת חקירה ממלכתית | {credit}\n\n#חדשותשישי עם @eliorlevy"
 
         assert strip_tag_credits(text) == "לא תוקם ועדת חקירה ממלכתית"
+
+
+def test_strip_tag_credits_ignores_direction_marks_and_removes_a_credit_with_at():
+    text = (
+        "השר עמיחי אליהו הוציא ספר | \u2066@gilicohen10\u2069  עם הפרטים\n\n"
+        "\u2067#מהדורתכאןחדשות\u2069 עם \u2066@talberman\u2069\n\n"
+        "אצל @mayarachlin"
+    )
+
+    assert strip_tag_credits(text) == "השר עמיחי אליהו הוציא ספר"
 
 
 def test_strip_tag_credits_keeps_tags_in_the_text_of_the_tweet():
