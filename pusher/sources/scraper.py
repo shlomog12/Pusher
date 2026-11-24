@@ -19,6 +19,7 @@ from pusher.sources.base import (
     TweetSource,
     TweetSourceError,
     best_mp4_url,
+    drop_status_link,
     expand_urls,
     is_allowed,
 )
@@ -314,6 +315,9 @@ def parse_tweet_result(result: dict[str, Any], author_username: str) -> Tweet | 
     media_links = {item["url"] for item in raw_media if item.get("url")}
 
     text = expand_urls(text, entities.get("urls", []), media_links)
+    quoted = _quoted_tweet(content)
+    if quoted is not None:
+        text = drop_status_link(text, quoted.id)
     return Tweet(
         id=tweet_id,
         author_username=author_username,
@@ -326,7 +330,15 @@ def parse_tweet_result(result: dict[str, Any], author_username: str) -> Tweet | 
         in_reply_to_id=outer_legacy.get("in_reply_to_status_id_str") or None,
         in_reply_to_username=outer_legacy.get("in_reply_to_screen_name") or None,
         first_version_id=_first_version_id(result, tweet_id),
+        quoted=quoted,
     )
+
+
+def _quoted_tweet(content: dict[str, Any]) -> Tweet | None:
+    quoted = _unwrap((content.get("quoted_status_result") or {}).get("result"))
+    if not quoted or not _screen_name(quoted):
+        return None
+    return parse_tweet_result(quoted, _screen_name(quoted))
 
 
 def _first_version_id(result: dict[str, Any], tweet_id: str) -> str | None:

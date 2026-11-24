@@ -228,3 +228,29 @@ def test_a_tweet_already_sent_as_a_retweet_is_skipped(tmp_path):
     assert forwarder.run_once() == 1
     assert telegram.sent == ["61"]
     assert state.load_last_tweet_id("page") == "60"
+
+
+def _quote(tweet_id, quoted, text="my take"):
+    return replace(_tweet(tweet_id, set(), author="me"), text=text, quoted=quoted)
+
+
+def test_a_quote_is_sent_after_the_quoted_tweet(tmp_path):
+    quoted = replace(_tweet("60", set(), author="other"), text="the original")
+    mine = FakeSource("me", [_quote("61", quoted), _quote("62", quoted, text="")])
+    forwarder, telegram, state = _forwarder(tmp_path, mine)
+    state.save_last_tweet_id("me", "1")
+
+    assert forwarder.run_once() == 1
+    assert telegram.sent == ["60", "61"]
+    assert telegram.texts == ["the original", "my take"]
+
+
+def test_a_quoted_tweet_already_sent_is_not_sent_again(tmp_path):
+    page = FakeSource("Page", [_tweet("60", {"me"})], mentioned_usernames=["me"])
+    mine = FakeSource("me", [_quote("61", _tweet("60", {"me"}))])
+    forwarder, telegram, state = _forwarder(tmp_path, page, mine)
+    state.save_last_tweet_id("page", "1")
+    state.save_last_tweet_id("me", "1")
+
+    assert forwarder.run_once() == 2
+    assert telegram.sent == ["60", "61"]

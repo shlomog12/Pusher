@@ -192,3 +192,18 @@ def test_edits_point_to_the_first_version():
         ("201", "201", False),
         ("205", "201", True),
     ]
+
+
+def test_parse_quote_includes_the_quoted_tweet_and_drops_its_link():
+    quoted = _tweet_result("10", "orig", "the original")
+    quote = _tweet_result(
+        "300", "page", "my take https://t.co/q",
+        urls=[{"url": "https://t.co/q", "expanded_url": "https://x.com/orig/status/10"}],
+    )
+    quote["quoted_status_result"] = {"result": quoted}
+
+    [tweet] = parse_timeline([_payload(quote)], "page")
+
+    assert tweet.text == "my take"
+    assert tweet.quoted.text == "the original"
+    assert tweet.quoted.url == "https://x.com/orig/status/10"

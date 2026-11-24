@@ -12,7 +12,13 @@ from typing import TYPE_CHECKING, Any, Iterable
 import requests
 
 from pusher.models import Media, MediaType, Tweet, merge_threads
-from pusher.sources.base import TweetSource, TweetSourceError, best_mp4_url, expand_urls
+from pusher.sources.base import (
+    TweetSource,
+    TweetSourceError,
+    best_mp4_url,
+    drop_status_link,
+    expand_urls,
+)
 
 if TYPE_CHECKING:
     from pusher.config import Config, Feed
@@ -26,8 +32,9 @@ TWEET_FIELDS = (
     "in_reply_to_user_id,edit_history_tweet_ids"
 )
 MEDIA_FIELDS = "type,url,preview_image_url,variants"
-# The retweeted tweet, its media and its author, so retweets are sent in full
-# rather than as X's truncated "RT @user: ..." text.
+# The retweeted or quoted tweet, its media and its author, so retweets are sent
+# in full rather than as X's truncated "RT @user: ..." text, and a quote with
+# the tweet it quotes.
 EXPANSIONS = ",".join([
     "attachments.media_keys",
     "referenced_tweets.id",
@@ -277,10 +284,15 @@ def parse_tweet(
         if parsed is not None
     )
 
+    text = html.unescape(expand_urls(text, entities.get("urls", []), set()))
+    quoted = _quoted_tweet(content, media_by_key, tweets_by_id, users_by_id)
+    if quoted is not None:
+        text = drop_status_link(text, quoted.id)
+
     return Tweet(
         id=raw["id"],
         author_username=author_username,
-        text=html.unescape(expand_urls(text, entities.get("urls", []), set())).strip(),
+        text=text.strip(),
         mentions=frozenset(mentions),
         media=media,
         created_at=raw.get("created_at"),
@@ -289,7 +301,25 @@ def parse_tweet(
         in_reply_to_id=_referenced_id(raw, "replied_to"),
         in_reply_to_username=_reply_target(raw, author_username, users_by_id),
         first_version_id=_first_version_id(raw),
+        quoted=quoted,
     )
+
+
+def _quoted_tweet(
+    content: dict[str, Any],
+    media_by_key: dict[str, dict[str, Any]],
+    tweets_by_id: dict[str, dict[str, Any]] | None,
+    users_by_id: dict[str, dict[str, Any]] | None,
+) -> Tweet | None:
+    """The tweet ``content`` quotes, when the response includes it and its author."""
+    quoted = (tweets_by_id or {}).get(_referenced_id(content, "quoted") or "")
+    if not quoted:
+        return None
+    author = (users_by_id or {}).get(quoted.get("author_id", ""), {}).get("username")
+    if not author:
+        return None
+    # Without the other tweets, a quote inside the quoted tweet stays a link.
+    return parse_tweet(quoted, author, media_by_key, users_by_id=users_by_id)
 
 
 def _first_version_id(raw: dict[str, Any]) -> str | None:

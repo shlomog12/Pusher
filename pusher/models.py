@@ -39,6 +39,8 @@ class Tweet:
     # On X every edit is a new tweet; this is the id of the first version when
     # this tweet is an edit of it.
     first_version_id: str | None = None
+    # The tweet this one quotes, sent in a message of its own before this one.
+    quoted: Tweet | None = None
 
     @property
     def url(self) -> str:

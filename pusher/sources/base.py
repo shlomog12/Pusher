@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from typing import Any, Iterable
 
@@ -103,3 +104,9 @@ def expand_urls(text: str, urls: list[dict[str, Any]], media_urls: set[str]) -> 
     for media_url in media_urls:
         text = text.replace(media_url, "")
     return text
+
+
+def drop_status_link(text: str, tweet_id: str) -> str:
+    """``text`` without the links to the tweet ``tweet_id``, e.g. the one a quote adds."""
+    pattern = rf"[ \t]*https?://(?:www\.)?(?:twitter|x)\.com/\w+/status/{tweet_id}\S*"
+    return re.sub(pattern, "", text)

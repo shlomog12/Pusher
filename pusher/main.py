@@ -84,9 +84,20 @@ class TweetForwarder:
         return sent
 
     def _forward(self, tweet: Tweet) -> bool:
+        """Send the tweet, after the tweet it quotes unless that was already sent.
+
+        Returns False when the tweet itself was already sent, e.g. as a retweet.
+        """
+        if tweet.quoted is None:
+            return self._send(tweet)
+        self._send(tweet.quoted)
+        # A quote without words of its own adds nothing to the quoted tweet.
+        return self._send(tweet) if tweet.text or tweet.media else False
+
+    def _send(self, tweet: Tweet) -> bool:
         """Send the tweet, or update the messages already sent for an earlier version.
 
-        Returns False when the tweet was already sent, e.g. as a retweet.
+        Returns False when the tweet was already sent.
         """
         text_tweet = tweet.without_credits(self._config.credit_prefixes)
         if self._config.remove_tag_credits:

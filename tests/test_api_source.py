@@ -262,3 +262,36 @@ def test_parse_tweet_reads_the_first_version_of_an_edit():
 
     assert edit.is_edit and edit.edit_root_id == "90"
     assert not first.is_edit and first.edit_root_id == "90"
+
+
+def test_parse_quote_includes_the_quoted_tweet_and_drops_its_link():
+    raw = {
+        "id": "200",
+        "text": "My take https://t.co/q",
+        "entities": {
+            "urls": [{"url": "https://t.co/q", "expanded_url": "https://twitter.com/orig/status/150"}]
+        },
+        "referenced_tweets": [{"type": "quoted", "id": "150"}],
+    }
+    original = _raw_tweet(id="150", author_id="9")
+    tweet = parse_tweet(raw, "me", MEDIA, {"150": original}, {"9": {"id": "9", "username": "Orig"}})
+
+    assert tweet.text == "My take"
+    assert not tweet.is_retweet
+    assert tweet.quoted.id == "150"
+    assert tweet.quoted.url == "https://x.com/Orig/status/150"
+    assert tweet.quoted.text == "Thanks @Me & friends https://example.com"
+    assert [m.type for m in tweet.quoted.media] == [MediaType.PHOTO, MediaType.VIDEO]
+
+
+def test_parse_quote_without_the_quoted_tweet_keeps_its_link():
+    raw = {
+        "id": "200",
+        "text": "My take https://twitter.com/orig/status/150",
+        "referenced_tweets": [{"type": "quoted", "id": "150"}],
+    }
+
+    tweet = parse_tweet(raw, "me", {})
+
+    assert tweet.quoted is None
+    assert tweet.text == "My take https://twitter.com/orig/status/150"

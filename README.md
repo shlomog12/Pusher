@@ -32,6 +32,11 @@ someone had sent it to you directly.
    - Telegram's own limits can't be avoided for long threads: text over 4096
      characters is split into several messages (between tweets where possible),
      and more than 10 media items are sent as several albums
+
+   A quote tweet is sent as two messages: first the quoted tweet, with its own
+   text and media, then the quote's text without the link to the quoted tweet.
+   When the quoted tweet was already sent, only the quote is sent; a quote with
+   no text of its own sends only the quoted tweet.
 3. Media is first sent by URL. If Telegram can't fetch it (Telegram fetches files
    up to 20 MB by URL), the bot downloads the file and uploads it (up to 50 MB).
    If that fails too, it sends the media as links.
