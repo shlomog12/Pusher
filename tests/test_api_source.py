@@ -77,6 +77,7 @@ def test_parse_retweet_uses_the_original_tweet_and_author():
     assert tweet.id == "200"
     assert tweet.url == "https://x.com/me/status/200"
     assert tweet.retweeted_username == "Orig"
+    assert tweet.retweeted_id == "150"
     assert tweet.text == "Thanks @Me & friends https://example.com"
     assert [m.type for m in tweet.media] == [MediaType.PHOTO, MediaType.VIDEO]
 

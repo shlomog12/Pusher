@@ -136,7 +136,7 @@ def test_credits_are_removed_from_the_sent_text(tmp_path):
 def test_tag_credits_are_removed_from_the_sent_text_only_when_configured(tmp_path):
     text = "news | @reporter עם הפרטים\n\n#show עם @host"
     for remove_tag_credits, expected in ((True, "news"), (False, text)):
-        config = replace(_config(tmp_path), remove_tag_credits=remove_tag_credits)
+        config = replace(_config(tmp_path / str(remove_tag_credits)), remove_tag_credits=remove_tag_credits)
         state = StateStore(config.state_file)
         state.save_last_tweet_id("page", "1")
         telegram = FakeTelegram()
@@ -150,7 +150,7 @@ def test_tag_credits_are_removed_from_the_sent_text_only_when_configured(tmp_pat
 def test_links_are_removed_from_the_sent_text_only_when_configured(tmp_path):
     text = "news\n\nhttps://www.kan.org.il/content/kan-news/politic/live-1122206/"
     for remove_links, expected in ((True, "news"), (False, text)):
-        config = replace(_config(tmp_path), remove_links=remove_links)
+        config = replace(_config(tmp_path / str(remove_links)), remove_links=remove_links)
         state = StateStore(config.state_file)
         state.save_last_tweet_id("page", "1")
         telegram = FakeTelegram()
@@ -199,3 +199,32 @@ def test_an_edit_of_a_tweet_that_was_not_sent_is_sent(tmp_path):
 
     assert telegram.sent == ["95"]
     assert telegram.updated == []
+
+
+def _retweet(tweet_id, retweeted_id):
+    return replace(
+        _tweet(tweet_id, set(), author="me"), retweeted_username="Page", retweeted_id=retweeted_id
+    )
+
+
+def test_a_retweet_of_a_tweet_already_sent_is_skipped(tmp_path):
+    page = FakeSource("Page", [_tweet("60", {"me"})], mentioned_usernames=["me"])
+    mine = FakeSource("me", [_retweet("61", "60"), _retweet("62", "55")])
+    forwarder, telegram, state = _forwarder(tmp_path, page, mine)
+    state.save_last_tweet_id("page", "1")
+    state.save_last_tweet_id("me", "1")
+
+    assert forwarder.run_once() == 2
+    assert telegram.sent == ["60", "62"]
+
+
+def test_a_tweet_already_sent_as_a_retweet_is_skipped(tmp_path):
+    mine = FakeSource("me", [_retweet("61", "60")])
+    page = FakeSource("Page", [_tweet("60", {"me"})], mentioned_usernames=["me"])
+    forwarder, telegram, state = _forwarder(tmp_path, mine, page)
+    state.save_last_tweet_id("page", "1")
+    state.save_last_tweet_id("me", "1")
+
+    assert forwarder.run_once() == 1
+    assert telegram.sent == ["61"]
+    assert state.load_last_tweet_id("page") == "60"

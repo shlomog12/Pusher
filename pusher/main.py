@@ -75,8 +75,7 @@ class TweetForwarder:
         # An edit made shortly after posting arrives with the versions before it;
         # only the newest one is sent.
         for tweet in latest_versions(source.new_tweets(since_id)):
-            if source.wants(tweet):
-                self._forward(tweet)
+            if source.wants(tweet) and self._forward(tweet):
                 sent += 1
             # A merged thread can end after a later standalone tweet; never move
             # the saved id backwards, or its tweets would be sent again.
@@ -84,21 +83,32 @@ class TweetForwarder:
             self._state.save_last_tweet_id(source.username, newest_id)
         return sent
 
-    def _forward(self, tweet: Tweet) -> None:
-        """Send the tweet, or update the messages already sent for an earlier version."""
+    def _forward(self, tweet: Tweet) -> bool:
+        """Send the tweet, or update the messages already sent for an earlier version.
+
+        Returns False when the tweet was already sent, e.g. as a retweet.
+        """
         text_tweet = tweet.without_credits(self._config.credit_prefixes)
         if self._config.remove_tag_credits:
             text_tweet = text_tweet.without_tag_credits()
         if self._config.remove_links:
             text_tweet = text_tweet.without_links()
-        previous = self._state.load_sent_messages(tweet.edit_root_id) if tweet.is_edit else None
+        previous = next(
+            (sent for key in tweet.sent_keys if (sent := self._state.load_sent_messages(key))),
+            None,
+        )
+        if previous is not None and not tweet.is_edit:
+            logger.info("Skipping tweet %s, it was already sent", tweet.url)
+            return False
         if previous is None:
             logger.info("Forwarding tweet %s", tweet.url)
             sent = self._telegram.send_tweet(text_tweet)
         else:
             logger.info("Updating the message of edited tweet %s", tweet.url)
             sent = self._telegram.update_tweet(SentTweet.from_dict(previous), text_tweet)
-        self._state.save_sent_messages(tweet.edit_root_id, sent.to_dict())
+        for key in tweet.sent_keys:
+            self._state.save_sent_messages(key, sent.to_dict())
+        return True
 
 
 def _describe(source: TweetSource) -> str:

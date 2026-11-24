@@ -82,6 +82,8 @@ def test_skips_other_authors_and_filters_retweets_and_replies():
     assert with_retweets[-1].text == "hi @me"
     assert with_retweets[-1].mentions_user("me")
     assert with_retweets[-1].retweeted_username == "x"
+    assert with_retweets[-1].retweeted_id == "10"
+    assert with_retweets[0].retweeted_id is None
     assert not with_retweets[0].is_retweet
 
 

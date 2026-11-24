@@ -285,6 +285,7 @@ def parse_tweet(
         media=media,
         created_at=raw.get("created_at"),
         retweeted_username=retweeted_username,
+        retweeted_id=retweeted_id,
         in_reply_to_id=_referenced_id(raw, "replied_to"),
         in_reply_to_username=_reply_target(raw, author_username, users_by_id),
         first_version_id=_first_version_id(raw),

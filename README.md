@@ -20,7 +20,9 @@ someone had sent it to you directly.
      off with `INCLUDE_THREADS=false`
    - with `FORWARD_MY_TWEETS=true`, your own account (`TWITTER_MY_USERNAME`),
      keeping all your tweets, plus your retweets when
-     `FORWARD_MY_RETWEETS=true`
+     `FORWARD_MY_RETWEETS=true`. A tweet reaches the chat once: your retweet of
+     a tweet that was already forwarded is skipped, and so is a tweet you
+     already forwarded by retweeting it
 2. Each of those tweets is forwarded to `TELEGRAM_CHAT_ID`. Retweets are sent
    with the full text and media of the original tweet:
    - no media → a text message, with the preview card of its first link (e.g. an article's image and title)

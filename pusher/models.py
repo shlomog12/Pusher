@@ -30,6 +30,8 @@ class Tweet:
     media: tuple[Media, ...] = ()
     created_at: str | None = None
     retweeted_username: str | None = None
+    # The id of the retweeted tweet, when this tweet is a retweet.
+    retweeted_id: str | None = None
     in_reply_to_id: str | None = None
     in_reply_to_username: str | None = None
     # Ids of the author's follow-up tweets merged into this one (see ``with_thread``).
@@ -66,6 +68,15 @@ class Tweet:
     @property
     def is_edit(self) -> bool:
         return self.edit_root_id != self.id
+
+    @property
+    def sent_keys(self) -> tuple[str, ...]:
+        """The ids the messages sent for this tweet are remembered by.
+
+        A retweet is also remembered by the retweeted tweet, so the same tweet
+        reaching the chat through two watched accounts is sent only once.
+        """
+        return (self.edit_root_id,) + ((self.retweeted_id,) if self.retweeted_id else ())
 
     @property
     def last_id(self) -> str:

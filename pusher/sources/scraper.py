@@ -322,6 +322,7 @@ def parse_tweet_result(result: dict[str, Any], author_username: str) -> Tweet | 
         media=media,
         created_at=outer_legacy.get("created_at"),
         retweeted_username=retweeted_username,
+        retweeted_id=(retweeted or {}).get("rest_id") or None,
         in_reply_to_id=outer_legacy.get("in_reply_to_status_id_str") or None,
         in_reply_to_username=outer_legacy.get("in_reply_to_screen_name") or None,
         first_version_id=_first_version_id(result, tweet_id),
