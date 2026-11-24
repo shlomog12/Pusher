@@ -133,11 +133,10 @@ def test_strip_tag_credits_removes_a_credit_after_a_bar_and_a_show_with_its_host
         assert strip_tag_credits(text) == "לא תוקם ועדת חקירה ממלכתית"
 
 
-def test_strip_tag_credits_ignores_direction_marks_and_removes_a_credit_with_at():
+def test_strip_tag_credits_ignores_direction_marks():
     text = (
         "השר עמיחי אליהו הוציא ספר | \u2066@gilicohen10\u2069  עם הפרטים\n\n"
-        "\u2067#מהדורתכאןחדשות\u2069 עם \u2066@talberman\u2069\n\n"
-        "אצל @mayarachlin"
+        "\u2067#מהדורתכאןחדשות\u2069 עם \u2066@talberman\u2069"
     )
 
     assert strip_tag_credits(text) == "השר עמיחי אליהו הוציא ספר"
@@ -147,6 +146,7 @@ def test_strip_tag_credits_keeps_tags_in_the_text_of_the_tweet():
     text = (
         "@yaara_shapira עם הפרטים על המו\"מ: הליכוד דורש ועדה\n"
         "השר @someone אמר כי | הליכוד מגיב\n\n"
+        "אצל @mayarachlin\n\n"
         "#חדשותשישי"
     )
 

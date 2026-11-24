@@ -165,7 +165,6 @@ _TAG_CREDIT = re.compile(
     rf"|{_TAGS}עם\s+הפרטים"  # @reporter עם הפרטים
     rf"|עם\s+הפרטים\s+{_TAGS}"  # עם הפרטים @reporter
     rf"|(?:#\w+\s*)+עם\s+{_TAGS}"  # #show עם @host
-    rf"|אצל\s+{_TAGS}"  # אצל @reporter
     r")\s*"
 )
 
@@ -182,9 +181,9 @@ def strip_tag_credits(text: str) -> str:
     """Remove the parts of lines that only credit reporters by their tags.
 
     A line, or a part of it after a "|", is removed when it holds only tags, or
-    tags in a credit such as "פרסום של @reporter", "@reporter עם הפרטים",
-    "אצל @reporter" or "#show עם @host". A link in such a part is kept, and so
-    is a tag anywhere in the text of the tweet itself.
+    tags in a credit such as "פרסום של @reporter", "@reporter עם הפרטים" or
+    "#show עם @host". A link in such a part is kept, and so is a tag anywhere
+    in the text of the tweet itself.
     """
     return _map_lines(text, _strip_line_tag_credits)
 
